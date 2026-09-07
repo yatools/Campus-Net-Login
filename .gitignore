@@ -6,3 +6,5 @@ publish/
 *.suo
 TestResults/
 .build/
+target/
+src.zip
