@@ -1,8 +1,6 @@
 # 南湖校园网自动登录
 
-面向 Windows 10/11 x64 的轻量原生托盘程序。程序使用 Rust 和 Windows 自带接口实现，发布物只有一个 EXE；使用电脑不需要安装 .NET、Rust、VC++ 运行库或 Windows SDK。
-
-项目地址：[yatools/Campus-Net-Login](https://github.com/yatools/Campus-Net-Login)
+面向 Windows 10/11 x64 的轻量原生托盘程序。程序使用 Rust 和 Windows 自带接口实现，发布物只有一个 EXE。
 
 ## 功能
 
@@ -15,7 +13,7 @@
 - 支持校园网、移动、联通和电信账号后缀。
 - 密码由 Windows DPAPI 按当前用户加密保存。
 - 双公网探测、失败冷却、暂停/恢复、立即检测和立即登录。
-- 可直接打开 `http://10.2.5.251/` 校园网登录页，也可从托盘注销当前校园网会话。
+- 可直接打开校园网登录页，也可从托盘注销当前校园网会话。
 - 注销成功后自动暂停重连，避免程序立即再次登录；需要联网时可从托盘恢复。
 - 原生托盘菜单与设置窗口，无 WebView 或 GUI 框架运行时。
 - 设置窗口采用 Per-Monitor V2 高 DPI、对话框单位布局和当前屏幕工作区居中，可适配常见 1080p、2K、4K 显示器及 100%–200% 缩放；跨屏移动时由 Windows 按目标屏幕 DPI 重排。
@@ -34,11 +32,10 @@
 - 不创建或读取 Windows 任务计划，也不获取当前用户 SID；注册表通过原生 Windows API 直接操作。
 - 配置通过同目录临时文件、落盘刷新和原子替换保存。
 
-旧版的系统代理修改、持久日志和 .NET 单文件缓存已移除。
 
 ## 构建
 
-开发电脑需要 Rust 1.98 GNU 工具链和 64 位 MinGW-w64，`cargo`、`gcc` 与 `windres` 应在 `PATH` 中。项目不依赖 Visual Studio、MSVC 或 Windows SDK。
+开发电脑需要 Rust 1.98 GNU 工具链和 64 位 MinGW-w64，`cargo`、`gcc` 与 `windres` 应在 `PATH` 中。
 
 ```powershell
 .\build-release.ps1
