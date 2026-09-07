@@ -6,13 +6,15 @@ use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{
     COLORREF, CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HINSTANCE, HWND, LPARAM,
-    LRESULT, POINT, WPARAM,
+    LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    COLOR_3DFACE, CreateSolidBrush, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteObject,
-    DrawFocusRect, DrawTextW, FillRect, FrameRect, GetMonitorInfoW, GetSysColorBrush, HDC, HGDIOBJ,
-    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, SelectObject,
-    SetBkMode, SetTextColor, TRANSPARENT,
+    COLOR_3DFACE, COLOR_GRAYTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW,
+    COLOR_WINDOWTEXT, ClientToScreen, CreateSolidBrush, DT_CENTER, DT_SINGLELINE, DT_VCENTER,
+    DeleteObject, DrawFocusRect, DrawTextW, FillRect, FrameRect, GetDC, GetMonitorInfoW,
+    GetSysColor, GetSysColorBrush, GetTextMetricsW, GetWindowDC, HDC, HGDIOBJ, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, RestoreDC, SaveDC,
+    SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoFreeUnusedLibrariesEx,
@@ -25,27 +27,31 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, CheckDlgButton, DRAWITEMSTRUCT, EM_SETCUEBANNER,
     ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, IsDlgButtonChecked,
-    ODS_FOCUS, ODS_SELECTED, UDM_SETBUDDY, UDM_SETPOS32, UDM_SETRANGE32,
+    MEASUREITEMSTRUCT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, UDM_SETBUDDY, UDM_SETPOS32,
+    UDM_SETRANGE32,
 };
 use windows::Win32::UI::Input::Ime::ImmDisableIME;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD,
-    NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW, ShellExecuteW,
+    DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, RemoveWindowSubclass, SetWindowSubclass,
+    Shell_NotifyIconW, ShellExecuteW,
 };
 use windows::Win32::UI::TextServices::{CLSID_TF_ThreadMgr, ITfThreadMgr};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE, CreatePopupMenu,
+    AppendMenuW, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CB_SETITEMHEIGHT, CreatePopupMenu,
     CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow, DialogBoxParamW, DispatchMessageW,
-    EN_CHANGE, EndDialog, FindWindowW, GWLP_USERDATA, GetCursorPos, GetDlgCtrlID, GetDlgItem,
-    GetMessageW, GetWindowRect, GetWindowTextW, HICON, ICON_BIG, ICON_SMALL, IDC_ARROW, IDCANCEL,
-    IDOK, IDYES, IMAGE_ICON, LR_SHARED, LoadCursorW, LoadImageW, MB_DEFBUTTON2, MB_ICONERROR,
-    MB_ICONWARNING, MB_OK, MB_YESNO, MENU_ITEM_FLAGS, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-    MF_STRING, MSG, MessageBoxW, PostMessageW, PostQuitMessage, RegisterClassExW,
-    RegisterWindowMessageW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TPM_LEFTALIGN,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_GETFONT,
-    WM_INITDIALOG, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON, WNDCLASSEXW, WS_OVERLAPPED,
+    EndDialog, FindWindowW, GWLP_USERDATA, GetClientRect, GetCursorPos, GetDlgCtrlID, GetDlgItem,
+    GetMessageW, GetWindowRect, GetWindowTextW, HICON, HWND_BOTTOM, ICON_BIG, ICON_SMALL,
+    IDC_ARROW, IDCANCEL, IDOK, IDYES, IMAGE_ICON, LR_SHARED, LoadCursorW, LoadImageW,
+    MB_DEFBUTTON2, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNO, MENU_ITEM_FLAGS, MF_CHECKED,
+    MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, NCCALCSIZE_PARAMS, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_SHOWNORMAL, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_GETFONT, WM_INITDIALOG,
+    WM_LBUTTONDBLCLK, WM_MEASUREITEM, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCPAINT, WM_PRINT,
+    WM_RBUTTONUP, WM_SETFONT, WM_SETICON, WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{Error as WindowsError, PCWSTR};
 use zeroize::Zeroize;
@@ -78,16 +84,16 @@ const IDC_COOLDOWN: i32 = 1005;
 const IDC_FALLBACK: i32 = 1006;
 const IDC_AUTOSTART: i32 = 1007;
 const IDC_NOTIFY_SUCCESS: i32 = 1008;
+const IDC_NOTIFY_FAILURE: i32 = 1019;
 const IDC_LOGIN_ONCE: i32 = 1016;
-const IDC_PAUSE_PERIODS: i32 = 1017;
 const IDC_GITHUB: i32 = 1018;
 const IDC_LAST_LOGIN: i32 = 1009;
 const IDC_STATUS: i32 = 1010;
 const IDC_CLEAR_DATA: u16 = 1011;
-const IDC_SUBMITTED_ACCOUNT: i32 = 1012;
 const IDC_INTERVAL_SPIN: i32 = 1013;
 const IDC_COOLDOWN_SPIN: i32 = 1014;
 const IDC_SECURITY_NOTICE: i32 = 1015;
+const IDC_COOLDOWN_FRAME: i32 = 1027;
 
 const IDM_OPEN_PORTAL: u32 = 4001;
 const IDM_DETECT: u32 = 4002;
@@ -290,7 +296,7 @@ impl App {
     }
 
     fn show_notification(&self, notification: &AppNotification) {
-        if !self.settings.snapshot().notifications_enabled {
+        if !notification.kind.is_enabled(&self.settings.snapshot()) {
             return;
         }
         let mut data = self.tray_data(NIF_INFO);
@@ -610,6 +616,20 @@ impl App {
     }
 
     fn initialize_settings_dialog(&self, dialog: HWND) {
+        // Decorative frame stays behind all inputs and never receives keyboard focus.
+        if let Ok(frame) = unsafe { GetDlgItem(Some(dialog), IDC_COOLDOWN_FRAME) } {
+            unsafe {
+                let _ = SetWindowPos(
+                    frame,
+                    Some(HWND_BOTTOM),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
         self.settings_dialog_hwnd
             .store(dialog.0 as isize, Ordering::Release);
         let settings = self.settings.snapshot();
@@ -641,7 +661,20 @@ impl App {
             settings.failure_cooldown_seconds,
         );
         set_dialog_text(dialog, IDC_FALLBACK, &settings.fallback_probe_url);
-        set_dialog_text(dialog, IDC_PAUSE_PERIODS, &settings.pause_periods);
+        for id in [
+            IDC_ACCOUNT,
+            IDC_PASSWORD,
+            IDC_INTERVAL,
+            IDC_COOLDOWN,
+            IDC_FALLBACK,
+        ] {
+            if let Ok(control) = unsafe { GetDlgItem(Some(dialog), id) } {
+                unsafe {
+                    let _ = SetWindowSubclass(control, Some(centered_edit_proc), 1, 0);
+                }
+                refresh_edit_frame(control);
+            }
+        }
         unsafe {
             let _ = CheckDlgButton(
                 dialog,
@@ -681,6 +714,10 @@ impl App {
         }
 
         if let Ok(combo) = unsafe { GetDlgItem(Some(dialog), IDC_PROVIDER) } {
+            unsafe {
+                let _ = SetWindowSubclass(combo, Some(provider_combo_proc), 3, 0);
+            }
+            size_provider_items(combo);
             for provider in Provider::ALL {
                 let text = to_wide(provider.display_name());
                 unsafe {
@@ -701,7 +738,6 @@ impl App {
                 );
             }
         }
-        update_submitted_account_preview(dialog);
         unsafe {
             let _ = CheckDlgButton(
                 dialog,
@@ -714,8 +750,17 @@ impl App {
             );
             let _ = CheckDlgButton(
                 dialog,
+                IDC_NOTIFY_FAILURE,
+                if settings.failure_notifications_enabled {
+                    BST_CHECKED
+                } else {
+                    BST_UNCHECKED
+                },
+            );
+            let _ = CheckDlgButton(
+                dialog,
                 IDC_NOTIFY_SUCCESS,
-                if settings.notifications_enabled {
+                if settings.success_notifications_enabled {
                     BST_CHECKED
                 } else {
                     BST_UNCHECKED
@@ -735,11 +780,9 @@ impl App {
         candidate.failure_cooldown_seconds = parse_dialog_i32(dialog, IDC_COOLDOWN, "失败冷却")?;
         candidate.provider = Provider::from_index(combo_selection(dialog, IDC_PROVIDER));
         candidate.auto_start = checkbox_checked(dialog, IDC_AUTOSTART);
-        candidate.notifications_enabled = checkbox_checked(dialog, IDC_NOTIFY_SUCCESS);
+        candidate.success_notifications_enabled = checkbox_checked(dialog, IDC_NOTIFY_SUCCESS);
+        candidate.failure_notifications_enabled = checkbox_checked(dialog, IDC_NOTIFY_FAILURE);
         candidate.autostart_login_once = checkbox_checked(dialog, IDC_LOGIN_ONCE);
-        candidate.pause_periods = get_dialog_text(dialog, IDC_PAUSE_PERIODS, 4096)
-            .trim()
-            .to_owned();
 
         let mut password = get_dialog_text(dialog, IDC_PASSWORD, 2048);
         if !password.is_empty() {
@@ -859,6 +902,14 @@ unsafe extern "system" fn settings_dialog_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> isize {
+    // Fixed owner-draw controls are measured before WM_INITDIALOG.
+    if message == WM_MEASUREITEM {
+        let item = unsafe { &mut *(lparam.0 as *mut MEASUREITEMSTRUCT) };
+        if item.CtlID == IDC_PROVIDER as u32 {
+            item.itemHeight = 20;
+            return 1;
+        }
+    }
     if message == WM_INITDIALOG {
         unsafe {
             SetWindowLongPtrW(dialog, GWLP_USERDATA, lparam.0);
@@ -879,13 +930,6 @@ unsafe extern "system" fn settings_dialog_proc(
     match message {
         WM_COMMAND => {
             let command = (wparam.0 & 0xffff) as u16;
-            let notification = ((wparam.0 >> 16) & 0xffff) as u16;
-            if (command == IDC_ACCOUNT as u16 && notification == EN_CHANGE as u16)
-                || (command == IDC_PROVIDER as u16 && notification == CBN_SELCHANGE as u16)
-            {
-                update_submitted_account_preview(dialog);
-                return 1;
-            }
             if command == IDOK.0 as u16 {
                 match app.save_settings_dialog(dialog) {
                     Ok(()) => unsafe {
@@ -942,6 +986,14 @@ unsafe extern "system" fn settings_dialog_proc(
         }
         WM_DRAWITEM => {
             let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            if item.CtlID == IDC_COOLDOWN_FRAME as u32 {
+                draw_cooldown_frame(item);
+                return 1;
+            }
+            if item.CtlID == IDC_PROVIDER as u32 {
+                draw_provider_item(item);
+                return 1;
+            }
             if item.CtlID == IDC_CLEAR_DATA as u32 {
                 draw_clear_data_button(item);
                 return 1;
@@ -1181,26 +1233,274 @@ fn configure_number_input(
     }
 }
 
-fn update_submitted_account_preview(dialog: HWND) {
-    let account = get_dialog_text(dialog, IDC_ACCOUNT, 512);
-    let account = account.trim();
-    let preview = if account.is_empty() {
-        "—".to_string()
-    } else {
-        Provider::from_index(combo_selection(dialog, IDC_PROVIDER)).submitted_account(account)
-    };
-    set_dialog_text(dialog, IDC_SUBMITTED_ACCOUNT, &preview);
+fn refresh_edit_frame(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+fn paint_edit_padding(hwnd: HWND, dc: HDC) {
+    let mut window = RECT::default();
+    let mut client = RECT::default();
+    let mut origin = POINT::default();
+    unsafe {
+        if GetWindowRect(hwnd, &mut window).is_err()
+            || GetClientRect(hwnd, &mut client).is_err()
+            || !ClientToScreen(hwnd, &mut origin).as_bool()
+        {
+            return;
+        }
+        let x = origin.x - window.left;
+        let y = origin.y - window.top;
+        let border = x.max(1);
+        let top = RECT {
+            left: x,
+            top: border,
+            right: x + client.right,
+            bottom: y,
+        };
+        let bottom = RECT {
+            left: x,
+            top: y + client.bottom,
+            right: x + client.right,
+            bottom: window.bottom - window.top - border.max(2),
+        };
+        let brush = GetSysColorBrush(COLOR_WINDOW);
+        if top.bottom > top.top {
+            FillRect(dc, &top, brush);
+        }
+        if bottom.bottom > bottom.top {
+            FillRect(dc, &bottom, brush);
+        }
+    }
+}
+
+// Keep native single-line/password/cue behavior; center the client area on the font's actual height.
+unsafe extern "system" fn centered_edit_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    match message {
+        WM_NCCALCSIZE => {
+            let rect = unsafe {
+                if wparam.0 != 0 {
+                    &mut (*(lparam.0 as *mut NCCALCSIZE_PARAMS)).rgrc[0]
+                } else {
+                    &mut *(lparam.0 as *mut RECT)
+                }
+            };
+            let dc = unsafe { GetDC(Some(hwnd)) };
+            if !dc.0.is_null() {
+                let font = unsafe { SendMessageW(hwnd, WM_GETFONT, None, None) }.0;
+                let previous =
+                    (font != 0).then(|| unsafe { SelectObject(dc, HGDIOBJ(font as *mut _)) });
+                let mut metrics = TEXTMETRICW::default();
+                if unsafe { GetTextMetricsW(dc, &mut metrics) }.as_bool() {
+                    let available = rect.bottom - rect.top;
+                    let height = metrics.tmHeight.min(available).max(1);
+                    rect.top += (available - height).max(0) / 2;
+                    rect.bottom = rect.top + height;
+                }
+                unsafe {
+                    if let Some(previous) = previous {
+                        SelectObject(dc, previous);
+                    }
+                    ReleaseDC(Some(hwnd), dc);
+                }
+            }
+            return LRESULT(0);
+        }
+        WM_NCPAINT => {
+            let dc = unsafe { GetWindowDC(Some(hwnd)) };
+            if !dc.0.is_null() {
+                paint_edit_padding(hwnd, dc);
+                unsafe {
+                    ReleaseDC(Some(hwnd), dc);
+                }
+            }
+        }
+        WM_PRINT if lparam.0 & 2 != 0 => paint_edit_padding(hwnd, HDC(wparam.0 as *mut _)),
+        WM_SETFONT => refresh_edit_frame(hwnd),
+        WM_NCDESTROY => unsafe {
+            let _ = RemoveWindowSubclass(hwnd, Some(centered_edit_proc), id);
+        },
+        _ => {}
+    }
+    result
+}
+
+fn size_provider_items(hwnd: HWND) {
+    unsafe {
+        let dc = GetDC(Some(hwnd));
+        if dc.0.is_null() {
+            return;
+        }
+        let saved = SaveDC(dc);
+        let font = SendMessageW(hwnd, WM_GETFONT, None, None).0;
+        if font != 0 {
+            SelectObject(dc, HGDIOBJ(font as *mut _));
+        }
+        let mut metrics = TEXTMETRICW::default();
+        if GetTextMetricsW(dc, &mut metrics).as_bool() {
+            let height = metrics.tmHeight + (metrics.tmHeight / 4).max(2);
+            SendMessageW(
+                hwnd,
+                CB_SETITEMHEIGHT,
+                Some(WPARAM(0)),
+                Some(LPARAM(height as isize)),
+            );
+            SendMessageW(
+                hwnd,
+                CB_SETITEMHEIGHT,
+                Some(WPARAM(usize::MAX)),
+                Some(LPARAM(height as isize)),
+            );
+        }
+        if saved != 0 {
+            let _ = RestoreDC(dc, saved);
+        }
+        ReleaseDC(Some(hwnd), dc);
+    }
+}
+
+unsafe extern "system" fn provider_combo_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    _data: usize,
+) -> LRESULT {
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if message == WM_SETFONT {
+        size_provider_items(hwnd);
+    }
+    if message == WM_NCDESTROY {
+        unsafe {
+            let _ = RemoveWindowSubclass(hwnd, Some(provider_combo_proc), id);
+        }
+    }
+    result
+}
+
+fn draw_provider_item(item: &DRAWITEMSTRUCT) {
+    let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+    let disabled = item.itemState.0 & ODS_DISABLED.0 != 0;
+    unsafe {
+        let saved = SaveDC(item.hDC);
+        FillRect(
+            item.hDC,
+            &item.rcItem,
+            GetSysColorBrush(if selected {
+                COLOR_HIGHLIGHT
+            } else {
+                COLOR_WINDOW
+            }),
+        );
+        let font = SendMessageW(item.hwndItem, WM_GETFONT, None, None).0;
+        if font != 0 {
+            SelectObject(item.hDC, HGDIOBJ(font as *mut _));
+        }
+        SetBkMode(item.hDC, TRANSPARENT);
+        SetTextColor(
+            item.hDC,
+            COLORREF(GetSysColor(if disabled {
+                COLOR_GRAYTEXT
+            } else if selected {
+                COLOR_HIGHLIGHTTEXT
+            } else {
+                COLOR_WINDOWTEXT
+            })),
+        );
+        if let Some(provider) = Provider::ALL.get(item.itemID as usize) {
+            let mut text: Vec<u16> = provider.display_name().encode_utf16().collect();
+            let mut rect = item.rcItem;
+            DrawTextW(
+                item.hDC,
+                &mut text,
+                &mut rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            );
+        }
+        if item.itemState.0 & ODS_FOCUS.0 != 0 {
+            let _ = DrawFocusRect(item.hDC, &item.rcItem);
+        }
+        if saved != 0 {
+            let _ = RestoreDC(item.hDC, saved);
+        }
+    }
+}
+
+fn draw_cooldown_frame(item: &DRAWITEMSTRUCT) {
+    let rect = item.rcItem;
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    // Resource geometry is 232 x 44 dialog units; keep the notch between the controls.
+    let notch_x = rect.left + width * 90 / 232;
+    let notch_y = rect.top + height / 2;
+    let stroke = ((height + 44) / 88).max(1);
+    let edges = [
+        RECT {
+            left: notch_x,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.top + stroke,
+        },
+        RECT {
+            left: rect.right - stroke,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+        RECT {
+            left: rect.left,
+            top: rect.bottom - stroke,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+        RECT {
+            left: rect.left,
+            top: notch_y,
+            right: rect.left + stroke,
+            bottom: rect.bottom,
+        },
+        RECT {
+            left: rect.left,
+            top: notch_y,
+            right: notch_x + stroke,
+            bottom: notch_y + stroke,
+        },
+        RECT {
+            left: notch_x,
+            top: rect.top,
+            right: notch_x + stroke,
+            bottom: notch_y + stroke,
+        },
+    ];
+    unsafe {
+        let pen = CreateSolidBrush(rgb(0, 0, 0));
+        for edge in edges {
+            FillRect(item.hDC, &edge, pen);
+        }
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
 }
 
 fn draw_clear_data_button(item: &DRAWITEMSTRUCT) {
-    let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
-    let fill = unsafe {
-        CreateSolidBrush(if selected {
-            rgb(150, 28, 28)
-        } else {
-            rgb(190, 38, 38)
-        })
-    };
+    let fill = unsafe { CreateSolidBrush(rgb(190, 38, 38)) };
     let border = unsafe { CreateSolidBrush(rgb(145, 24, 24)) };
     unsafe {
         FillRect(item.hDC, &item.rcItem, fill);
@@ -1211,10 +1511,6 @@ fn draw_clear_data_button(item: &DRAWITEMSTRUCT) {
     let length = unsafe { GetWindowTextW(item.hwndItem, &mut buffer) }.max(0) as usize;
     let mut text = buffer[..length].to_vec();
     let mut rectangle = item.rcItem;
-    if selected {
-        rectangle.left += 1;
-        rectangle.top += 1;
-    }
     let font = unsafe { SendMessageW(item.hwndItem, WM_GETFONT, None, None) }.0;
     let previous_font =
         (font != 0).then(|| unsafe { SelectObject(item.hDC, HGDIOBJ(font as *mut _)) });

@@ -183,13 +183,37 @@ try {
         [CampusUiSmokeNative]::ItemText($dialog, 1005) -ne '20') {
         throw '默认检测间隔或失败冷却不正确。'
     }
-    foreach ($controlId in @(1016, 1017, 1018)) {
+    foreach ($controlId in @(1016, 1018, 1019)) {
         if ([CampusUiSmokeNative]::GetDlgItem($dialog, $controlId) -eq [IntPtr]::Zero) {
             throw "新增设置控件不存在：$controlId"
         }
     }
-    if ([CampusUiSmokeNative]::ItemText($dialog, 1008) -notmatch '所有系统通知') {
-        throw '通知开关未更新。'
+    if ([CampusUiSmokeNative]::ItemText($dialog, 1008) -ne '显示成功通知' -or
+        [CampusUiSmokeNative]::ItemText($dialog, 1019) -ne '显示失败通知') {
+        throw '通知选项文案不正确。'
+    }
+    $successChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1008), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    $failureChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1019), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    if ($successChecked -ne 0 -or $failureChecked -ne 1) {
+        throw '通知默认值应为仅开启失败通知。'
+    }
+
+    foreach ($removedId in @(1017, 1020, 1021, 1022, 1023, 1024, 1025, 1026)) {
+        if ([CampusUiSmokeNative]::GetDlgItem($dialog, $removedId) -ne [IntPtr]::Zero) {
+            throw '暂停时段或星期控件未删除。'
+        }
+    }
+    $providerRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1003))
+    $intervalRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1004))
+    $spinRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1013))
+    if ([Math]::Abs(($providerRect.Right - $providerRect.Left) - ([Math]::Max($intervalRect.Right, $spinRect.Right) - $intervalRect.Left)) -gt 2) {
+        throw '服务商下拉框与检测间隔输入框宽度不一致。'
+    }
+
+    $accountRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1001))
+    $fallbackRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1006))
+    if (($accountRect.Right - $accountRect.Left) -ge ($fallbackRect.Right - $fallbackRect.Left)) {
+        throw '账号输入框仍过宽。'
     }
 
     $providerCombo = [CampusUiSmokeNative]::GetDlgItem($dialog, 1003)
@@ -211,19 +235,18 @@ try {
         [UIntPtr]((1 -shl 16) -bor 1003),
         $providerCombo)
     Start-Sleep -Milliseconds 100
-    $submittedAccount = [CampusUiSmokeNative]::ItemText($dialog, 1012)
     $securityNotice = [CampusUiSmokeNative]::ItemText($dialog, 1015)
     $clearDataText = [CampusUiSmokeNative]::ItemText($dialog, 1011)
     $intervalSpin = [CampusUiSmokeNative]::GetDlgItem($dialog, 1013)
     $cooldownSpin = [CampusUiSmokeNative]::GetDlgItem($dialog, 1014)
-    if ($submittedAccount -ne 'TS25030092A31LD@telecom') {
-        $actualAccount = [CampusUiSmokeNative]::ItemText($dialog, 1001)
-        $actualProvider = [CampusUiSmokeNative]::SendMessage(
-            $providerCombo,
-            0x0147,
-            [UIntPtr]::Zero,
-            [IntPtr]::Zero).ToInt64()
-        throw "实际提交账号没有随账号和服务商更新：$submittedAccount；账号=$actualAccount；服务商索引=$actualProvider"
+    if ([CampusUiSmokeNative]::GetDlgItem($dialog, 1012) -ne [IntPtr]::Zero) {
+        throw '实际提交账号栏仍然存在。'
+    }
+    $startupRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1007))
+    $onceRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1016))
+    $notifyRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1008))
+    if ($startupRect.Left -ne $onceRect.Left -or $onceRect.Top -le $startupRect.Top -or $notifyRect.Top -le $onceRect.Top) {
+        throw '自启与通知选项排列不正确。'
     }
     if ($securityNotice -notmatch 'Windows' -or $securityNotice -notmatch 'HTTP') {
         throw "安全说明缺失：$securityNotice"
@@ -290,6 +313,7 @@ try {
                 $graphics.ReleaseHdc($deviceContext)
             }
             $bitmap.Save($screenshotPath, [Drawing.Imaging.ImageFormat]::Png)
+
         }
         finally {
             $graphics.Dispose()
@@ -307,7 +331,6 @@ try {
         Cooldown = [CampusUiSmokeNative]::ItemText($dialog, 1005)
         Fallback = [CampusUiSmokeNative]::ItemText($dialog, 1006)
         ProviderCount = $providerCount
-        SubmittedAccount = $submittedAccount
         ClearDataButton = $clearDataText
         DialogSize = "$(($dialogRect.Right - $dialogRect.Left))x$(($dialogRect.Bottom - $dialogRect.Top))"
         CurrentDpi = $currentDpi

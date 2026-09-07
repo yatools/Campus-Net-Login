@@ -78,10 +78,3 @@ mod tests {
         );
     }
 }
-
-pub fn local_second_of_day() -> u32 {
-    let utc = unsafe { GetSystemTime() };
-    let mut local = utc;
-    let _ = unsafe { SystemTimeToTzSpecificLocalTime(None, &utc, &mut local) };
-    u32::from(local.wHour) * 3600 + u32::from(local.wMinute) * 60 + u32::from(local.wSecond)
-}

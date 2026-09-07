@@ -82,6 +82,15 @@ pub enum NotificationKind {
     Error,
 }
 
+impl NotificationKind {
+    pub fn is_enabled(self, settings: &AppSettings) -> bool {
+        match self {
+            Self::Success | Self::Information => settings.success_notifications_enabled,
+            Self::Warning | Self::Error => settings.failure_notifications_enabled,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AppNotification {
     pub kind: NotificationKind,
@@ -315,20 +324,6 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
                 }
                 MonitorCommand::Detect => next_delay = self.execute_detection_cycle(),
             }
-            // Wake at the next daily boundary even when the normal interval is long.
-            if let Ok(periods) =
-                crate::settings::parse_pause_periods(&self.settings.snapshot().pause_periods)
-            {
-                let now = crate::time_utils::local_second_of_day();
-                for (start, end) in periods {
-                    for minute in [start, end] {
-                        let seconds = (u32::from(minute) * 60 + 86400 - now) % 86400;
-                        if seconds > 0 {
-                            next_delay = next_delay.min(Duration::from_secs(u64::from(seconds)));
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -339,16 +334,6 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
             return self.normal_interval();
         }
 
-        if let Some(seconds) = crate::settings::pause_remaining_seconds(
-            &settings.pause_periods,
-            crate::time_utils::local_second_of_day(),
-        ) {
-            self.publish(
-                NetworkState::Paused,
-                "当前处于暂停时段，自动登录和检测均已暂停。",
-            );
-            return Duration::from_secs(seconds.min(60));
-        }
         if settings.autostart_login_once && self.once_consumed {
             self.publish(
                 NetworkState::Paused,
@@ -366,14 +351,6 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         }
 
         if !self.sleep_interruptible(Duration::from_secs(2)) {
-            return Duration::ZERO;
-        }
-        if crate::settings::pause_remaining_seconds(
-            &settings.pause_periods,
-            crate::time_utils::local_second_of_day(),
-        )
-        .is_some()
-        {
             return Duration::ZERO;
         }
         if self.backend.internet_available(&settings) {
@@ -404,14 +381,6 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     }
 
     fn execute_automatic_login(&mut self, settings: &AppSettings) -> Duration {
-        if crate::settings::pause_remaining_seconds(
-            &settings.pause_periods,
-            crate::time_utils::local_second_of_day(),
-        )
-        .is_some()
-        {
-            return Duration::ZERO;
-        }
         self.once_consumed = true;
         let password = match decrypt_password(&settings.encrypted_password) {
             Ok(password) => password,
@@ -423,26 +392,10 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         };
         let submitted_account = settings.provider.submitted_account(&settings.account);
 
-        if crate::settings::pause_remaining_seconds(
-            &settings.pause_periods,
-            crate::time_utils::local_second_of_day(),
-        )
-        .is_some()
-        {
-            return Duration::ZERO;
-        }
         self.once_consumed = true;
         self.publish(NetworkState::Authenticating, "正在自动登录。");
         let _ = self.backend.login(&submitted_account, password.as_str());
         if !self.sleep_interruptible(Duration::from_secs(3)) {
-            return Duration::ZERO;
-        }
-        if crate::settings::pause_remaining_seconds(
-            &settings.pause_periods,
-            crate::time_utils::local_second_of_day(),
-        )
-        .is_some()
-        {
             return Duration::ZERO;
         }
         if self.backend.internet_available(settings) {
@@ -535,7 +488,7 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         if let Ok(settings) = update {
             (self.sink)(MonitorEvent::SettingsChanged(settings.clone()));
             self.publish(NetworkState::Online, "登录成功，公网连接已恢复。");
-            if settings.notifications_enabled {
+            if settings.success_notifications_enabled {
                 self.notify(
                     NotificationKind::Success,
                     "校园网登录成功",
@@ -581,7 +534,7 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     }
 
     fn notify(&self, kind: NotificationKind, title: &str, message: &str) {
-        if !self.settings.snapshot().notifications_enabled {
+        if !kind.is_enabled(&self.settings.snapshot()) {
             return;
         }
         (self.sink)(MonitorEvent::Notification(AppNotification {
@@ -733,19 +686,6 @@ mod tests {
     }
 
     #[test]
-    fn pause_window_prevents_all_automatic_network_requests() {
-        let (mut worker, manager, directory) = fixture([], 20);
-        manager
-            .update(|s| s.pause_periods = "00:00-12:00;12:00-00:00".into())
-            .unwrap();
-        worker.execute_detection_cycle();
-        assert_eq!(worker.backend.login_count, 0);
-        assert!(!worker.once_consumed);
-        assert_eq!(worker.current.lock().unwrap().state, NetworkState::Paused);
-        let _ = fs::remove_dir_all(directory);
-    }
-
-    #[test]
     fn recovery_resets_failure_backoff() {
         let (mut worker, _, directory) = fixture([true], 20);
         worker.consecutive_failures = 8;
@@ -755,24 +695,41 @@ mod tests {
     }
 
     #[test]
-    fn notification_switch_suppresses_every_kind() {
+    fn success_and_failure_notifications_are_independently_filtered() {
         let (mut worker, manager, directory) = fixture([], 20);
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = events.clone();
-        worker.sink = Arc::new(move |e| captured.lock().unwrap().push(e));
-        manager.update(|s| s.notifications_enabled = false).unwrap();
-        for kind in [
-            NotificationKind::Success,
-            NotificationKind::Error,
-            NotificationKind::Warning,
-            NotificationKind::Information,
-        ] {
-            worker.notify(kind, "test", "test");
+        worker.sink = Arc::new(move |event| captured.lock().unwrap().push(event));
+        for (success, failure) in [(false, true), (true, false), (false, false), (true, true)] {
+            manager
+                .update(|s| {
+                    s.success_notifications_enabled = success;
+                    s.failure_notifications_enabled = failure;
+                })
+                .unwrap();
+            events.lock().unwrap().clear();
+            for kind in [
+                NotificationKind::Success,
+                NotificationKind::Error,
+                NotificationKind::Warning,
+                NotificationKind::Information,
+            ] {
+                worker.notify(kind, "test", "test");
+            }
+            let kinds: Vec<_> = events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|event| match event {
+                    MonitorEvent::Notification(n) => Some(n.kind),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(kinds.contains(&NotificationKind::Success), success);
+            assert_eq!(kinds.contains(&NotificationKind::Information), success);
+            assert_eq!(kinds.contains(&NotificationKind::Error), failure);
+            assert_eq!(kinds.contains(&NotificationKind::Warning), failure);
         }
-        assert!(events.lock().unwrap().is_empty());
-        manager.update(|s| s.notifications_enabled = true).unwrap();
-        worker.notify(NotificationKind::Information, "test", "test");
-        assert_eq!(events.lock().unwrap().len(), 1);
         let _ = fs::remove_dir_all(directory);
     }
 

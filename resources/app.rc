@@ -13,15 +13,15 @@
 #define IDC_FALLBACK 1006
 #define IDC_AUTOSTART 1007
 #define IDC_NOTIFY_SUCCESS 1008
+#define IDC_NOTIFY_FAILURE 1019
 #define IDC_LAST_LOGIN 1009
 #define IDC_STATUS 1010
 #define IDC_CLEAR_DATA 1011
-#define IDC_SUBMITTED_ACCOUNT 1012
 #define IDC_INTERVAL_SPIN 1013
 #define IDC_COOLDOWN_SPIN 1014
 #define IDC_SECURITY_NOTICE 1015
+#define IDC_COOLDOWN_FRAME 1027
 #define IDC_LOGIN_ONCE 1016
-#define IDC_PAUSE_PERIODS 1017
 #define IDC_GITHUB 1018
 
 IDI_BLUE ICON "resources/assets/campus-blue.ico"
@@ -56,58 +56,53 @@ BEGIN
     END
 END
 
-IDD_SETTINGS DIALOGEX 0, 0, 500, 310
+IDD_SETTINGS DIALOGEX 0, 0, 360, 286
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 EXSTYLE WS_EX_APPWINDOW
 CAPTION "校园网自动登录设置"
 FONT 9, "Microsoft YaHei UI", 400, 0, 0x86
 BEGIN
-    LTEXT           "学号或账号", -1, 18, 14, 84, 12
-    EDITTEXT        IDC_ACCOUNT, 110, 12, 372, 16, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "学号或账号", -1, 10, 14, 74, 12
+    EDITTEXT        IDC_ACCOUNT, 88, 12, 185, 16, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "GitHub", IDC_GITHUB, 304, 12, 46, 16
 
-    LTEXT           "密码", -1, 18, 35, 84, 12
-    EDITTEXT        IDC_PASSWORD, 110, 33, 372, 16, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "密码", -1, 10, 35, 74, 12
+    EDITTEXT        IDC_PASSWORD, 88, 33, 185, 16, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "服务商", -1, 18, 56, 84, 12
-    COMBOBOX        IDC_PROVIDER, 110, 54, 372, 82, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "服务商", -1, 10, 56, 74, 12
+    COMBOBOX        IDC_PROVIDER, 88, 54, 82, 82, CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "实际提交账号", -1, 18, 77, 84, 12
-    LTEXT           "—", IDC_SUBMITTED_ACCOUNT, 110, 77, 372, 12, SS_LEFTNOWORDWRAP
+    CONTROL         "", IDC_COOLDOWN_FRAME, "Static", SS_OWNERDRAW | WS_CLIPSIBLINGS, 84, 71, 232, 44
 
-    LTEXT           "检测间隔（秒）", -1, 18, 98, 84, 12
-    EDITTEXT        IDC_INTERVAL, 110, 96, 100, 16, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
-    CONTROL         "", IDC_INTERVAL_SPIN, "msctls_updown32", UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_SETBUDDYINT | UDS_NOTHOUSANDS, 197, 96, 13, 16
+    LTEXT           "检测间隔（秒）", -1, 10, 77, 74, 12
+    EDITTEXT        IDC_INTERVAL, 88, 75, 82, 16, ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL         "", IDC_INTERVAL_SPIN, "msctls_updown32", UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_SETBUDDYINT | UDS_NOTHOUSANDS, 157, 75, 13, 16
+    LTEXT           "失败三次冷却翻倍，CD上限为检测间隔", -1, 180, 77, 128, 12
 
-    LTEXT           "连续第 3 次失败起翻倍，上限为检测间隔", -1, 220, 98, 262, 12
+    LTEXT           "失败冷却（秒）", -1, 10, 98, 74, 12
+    EDITTEXT        IDC_COOLDOWN, 88, 96, 82, 16, ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL         "", IDC_COOLDOWN_SPIN, "msctls_updown32", UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_SETBUDDYINT | UDS_NOTHOUSANDS, 157, 96, 13, 16
+    LTEXT           "-1：失败后暂停自动重连；0：不额外冷却", -1, 180, 98, 128, 12
 
-    LTEXT           "失败冷却（秒）", -1, 18, 119, 84, 12
-    EDITTEXT        IDC_COOLDOWN, 110, 117, 100, 16, ES_AUTOHSCROLL | WS_TABSTOP
-    CONTROL         "", IDC_COOLDOWN_SPIN, "msctls_updown32", UDS_ALIGNRIGHT | UDS_ARROWKEYS | UDS_SETBUDDYINT | UDS_NOTHOUSANDS, 197, 117, 13, 16
-    LTEXT           "-1：失败后暂停自动重连；0：不额外冷却", -1, 220, 120, 192, 12
+    LTEXT           "国内备用探测", -1, 10, 119, 74, 12
+    EDITTEXT        IDC_FALLBACK, 88, 117, 230, 16, ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "国内备用探测", -1, 18, 140, 84, 12
-    EDITTEXT        IDC_FALLBACK, 110, 138, 372, 16, ES_AUTOHSCROLL | WS_TABSTOP
+    LTEXT           "开机自启", -1, 10, 143, 74, 12
+    CONTROL         "用户登录 Windows 后自动启动", IDC_AUTOSTART, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 139, 262, 16
+    CONTROL         "仅开机自启时自动登录一次（不再自动检测/重试）", IDC_LOGIN_ONCE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 159, 262, 16
 
-    LTEXT           "开机自启", -1, 18, 164, 84, 12
-    CONTROL         "当前用户登录 Windows 后自动启动", IDC_AUTOSTART, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 110, 160, 246, 16
-    CONTROL         "显示所有系统通知", IDC_NOTIFY_SUCCESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 365, 160, 117, 16
+    LTEXT           "通知", -1, 10, 185, 74, 12
+    CONTROL         "显示成功通知", IDC_NOTIFY_SUCCESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 181, 100, 16
+    CONTROL         "显示失败通知", IDC_NOTIFY_FAILURE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 208, 181, 100, 16
 
-    LTEXT           "自动登录模式", -1, 18, 185, 84, 12
-    CONTROL         "仅开机自启时自动登录一次（不再自动检测/重试）", IDC_LOGIN_ONCE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 110, 181, 372, 16
+    LTEXT           "最近成功登录", -1, 10, 201, 68, 12
+    LTEXT           "暂无", IDC_LAST_LOGIN, 88, 201, 262, 12, SS_LEFTNOWORDWRAP
+    LTEXT           "当前网络状态", -1, 10, 220, 72, 12
+    LTEXT           "等待检测", IDC_STATUS, 88, 220, 262, 18, SS_LEFT
 
-    LTEXT           "暂停时段", -1, 18, 206, 84, 12
-    EDITTEXT        IDC_PAUSE_PERIODS, 110, 202, 372, 16, ES_AUTOHSCROLL | WS_TABSTOP
-    LTEXT           "本机时间，如 23:00-07:00;12:00-13:00；留空为不暂停", -1, 110, 222, 372, 12
+    LTEXT           "密码使用 Windows 当前用户身份加密保存；校园网认证接口为 HTTP。", IDC_SECURITY_NOTICE, 10, 240, 340, 12, SS_LEFT
 
-    LTEXT           "最近成功登录", -1, 18, 243, 72, 12
-    LTEXT           "暂无", IDC_LAST_LOGIN, 90, 243, 145, 12, SS_LEFTNOWORDWRAP
-    LTEXT           "当前网络状态", -1, 245, 243, 75, 12
-    LTEXT           "等待检测", IDC_STATUS, 320, 243, 162, 20, SS_LEFT
-
-    LTEXT           "密码使用 Windows 当前用户身份加密保存；校园网认证接口为 HTTP。", IDC_SECURITY_NOTICE, 18, 266, 464, 12, SS_LEFT
-
-    PUSHBUTTON      "GitHub 项目主页", IDC_GITHUB, 18, 283, 96, 19
-    CONTROL         "⚠ 清除所有数据并退出", IDC_CLEAR_DATA, "Button", BS_OWNERDRAW | WS_TABSTOP, 266, 283, 116, 19
-    PUSHBUTTON      "关闭", IDCANCEL, 388, 283, 44, 19
-    DEFPUSHBUTTON   "保存", IDOK, 438, 283, 44, 19
+    CONTROL         "⚠ 清除所有数据并退出", IDC_CLEAR_DATA, "Button", BS_OWNERDRAW | WS_TABSTOP, 10, 258, 122, 19
+    PUSHBUTTON      "关闭", IDCANCEL, 140, 258, 100, 19
+    DEFPUSHBUTTON   "保存", IDOK, 250, 258, 100, 19
 END

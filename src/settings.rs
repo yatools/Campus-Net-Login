@@ -13,7 +13,7 @@ use windows::Win32::Storage::FileSystem::{
 use crate::AppResult;
 use crate::wide::{pcwstr, to_wide};
 
-pub const PROJECT_URL: &str = "https://github.com/yatools/CampusNetAutoLogin";
+pub const PROJECT_URL: &str = "https://github.com/yatools/Campus-Net-Login";
 
 pub const APP_NAME: &str = "CampusNetAutoLogin";
 pub const DEFAULT_FALLBACK_PROBE_URL: &str = "https://www.baidu.com/favicon.ico";
@@ -80,17 +80,16 @@ pub struct AppSettings {
     pub failure_cooldown_seconds: i32,
     pub fallback_probe_url: String,
     pub auto_start: bool,
-    #[serde(alias = "successNotification")]
-    pub notifications_enabled: bool,
+    pub success_notifications_enabled: bool,
+    pub failure_notifications_enabled: bool,
     pub autostart_login_once: bool,
-    pub pause_periods: String,
     pub last_successful_login_utc: Option<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 5,
             account: String::new(),
             provider: Provider::Campus,
             encrypted_password: String::new(),
@@ -98,9 +97,9 @@ impl Default for AppSettings {
             failure_cooldown_seconds: 20,
             fallback_probe_url: DEFAULT_FALLBACK_PROBE_URL.to_string(),
             auto_start: false,
-            notifications_enabled: true,
+            success_notifications_enabled: false,
+            failure_notifications_enabled: true,
             autostart_login_once: false,
-            pause_periods: String::new(),
             last_successful_login_utc: None,
         }
     }
@@ -111,7 +110,7 @@ impl AppSettings {
         if self.schema_version < 2 && self.failure_cooldown_seconds == 0 {
             self.failure_cooldown_seconds = -1;
         }
-        self.schema_version = 2;
+        self.schema_version = 5;
         self.account = self.account.trim().to_string();
         self.check_interval_seconds = self.check_interval_seconds.clamp(10, 3600);
         self.failure_cooldown_seconds = self.failure_cooldown_seconds.clamp(-1, 3600);
@@ -142,64 +141,11 @@ impl AppSettings {
         if !(-1..=3600).contains(&self.failure_cooldown_seconds) {
             errors.push("失败冷却时间必须在 -1 到 3600 秒之间。".to_string());
         }
-        if parse_pause_periods(&self.pause_periods).is_err() {
-            errors.push(
-                "暂停时段格式应为 HH:MM-HH:MM，多个时段用分号分隔，起止时间不能相同。".to_string(),
-            );
-        }
         if !is_valid_fallback_url(&self.fallback_probe_url) {
             errors.push("国内备用探测地址必须是有效的 HTTPS 地址。".to_string());
         }
         errors
     }
-}
-
-/// Daily local-time intervals, start inclusive and end exclusive.
-pub fn parse_pause_periods(value: &str) -> Result<Vec<(u16, u16)>, ()> {
-    fn minute(value: &str) -> Result<u16, ()> {
-        let value = value.trim();
-        let b = value.as_bytes();
-        if b.len() != 5 || b[2] != b':' || ![b[0], b[1], b[3], b[4]].iter().all(u8::is_ascii_digit)
-        {
-            return Err(());
-        }
-        let h = value[..2].parse::<u16>().map_err(|_| ())?;
-        let m = value[3..].parse::<u16>().map_err(|_| ())?;
-        if h > 23 || m > 59 {
-            return Err(());
-        }
-        Ok(h * 60 + m)
-    }
-    if value.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    value
-        .split([';', '；'])
-        .map(|part| {
-            let (start, end) = part.trim().split_once('-').ok_or(())?;
-            let (start, end) = (minute(start)?, minute(end)?);
-            if start == end {
-                return Err(());
-            }
-            Ok((start, end))
-        })
-        .collect()
-}
-
-pub fn pause_remaining_seconds(periods: &str, second: u32) -> Option<u64> {
-    parse_pause_periods(periods)
-        .ok()?
-        .into_iter()
-        .filter_map(|(start, end)| {
-            let (start, end) = (u32::from(start) * 60, u32::from(end) * 60);
-            let active = if start < end {
-                second >= start && second < end
-            } else {
-                second >= start || second < end
-            };
-            active.then(|| u64::from((end + 86400 - second) % 86400))
-        })
-        .max()
 }
 
 pub fn is_valid_fallback_url(value: &str) -> bool {
@@ -408,42 +354,42 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn daily_pause_boundaries_and_invalid_inputs() {
-        let periods = "23:00-07:00;12:00-13:00";
-        assert_eq!(pause_remaining_seconds(periods, 23 * 3600), Some(8 * 3600));
-        assert_eq!(pause_remaining_seconds(periods, 0), Some(7 * 3600));
-        assert_eq!(pause_remaining_seconds(periods, 7 * 3600), None);
-        assert_eq!(pause_remaining_seconds(periods, 12 * 3600), Some(3600));
-        assert_eq!(pause_remaining_seconds(periods, 13 * 3600), None);
-        for invalid in [
-            "24:00-07:00",
-            "12:60-13:00",
-            "00:00-00:00",
-            "学校-时间",
-            "1:00-02:00",
-            "12:00-13:00;",
-        ] {
-            assert!(parse_pause_periods(invalid).is_err());
-        }
-        assert!(parse_pause_periods("").unwrap().is_empty());
+    fn removed_schedule_fields_are_ignored_and_not_saved_again() {
+        let old: AppSettings = serde_json::from_str(r#"{"schemaVersion":3,"account":"123","pausePeriods":"23:33-07:30","pauseWeekdays":[true,true,true,true,true,true,true]}"#).unwrap();
+        let settings = old.normalize();
+        assert_eq!(settings.account, "123");
+        assert_eq!(settings.schema_version, 5);
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(!json.contains("pausePeriods"));
+        assert!(!json.contains("pauseWeekdays"));
     }
 
     #[test]
-    fn new_options_round_trip_and_legacy_notification_migrates() {
-        let old: AppSettings = serde_json::from_str(r#"{"successNotification":false}"#).unwrap();
-        assert!(!old.notifications_enabled);
-        let value = AppSettings {
-            autostart_login_once: true,
-            pause_periods: "23:00-07:00".into(),
-            ..old
-        };
-        let json = serde_json::to_string(&value).unwrap();
-        let restored: AppSettings = serde_json::from_str(&json).unwrap();
-        assert!(restored.autostart_login_once);
-        assert_eq!(restored.pause_periods, "23:00-07:00");
-        assert!(!restored.notifications_enabled);
-        assert_eq!(restored.check_interval_seconds, 1800);
-        assert_eq!(restored.failure_cooldown_seconds, 20);
+    fn notification_defaults_and_independent_settings_round_trip() {
+        for legacy in [
+            r#"{}"#,
+            r#"{"notificationsEnabled":true}"#,
+            r#"{"successNotification":true}"#,
+        ] {
+            let settings: AppSettings = serde_json::from_str(legacy).unwrap();
+            assert!(!settings.success_notifications_enabled);
+            assert!(settings.failure_notifications_enabled);
+        }
+        for (success, failure) in [(false, false), (false, true), (true, false), (true, true)] {
+            let settings = AppSettings {
+                success_notifications_enabled: success,
+                failure_notifications_enabled: failure,
+                autostart_login_once: true,
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let restored: AppSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.success_notifications_enabled, success);
+            assert_eq!(restored.failure_notifications_enabled, failure);
+            assert!(restored.autostart_login_once);
+            assert_eq!(restored.check_interval_seconds, 1800);
+            assert_eq!(restored.failure_cooldown_seconds, 20);
+        }
     }
 
     #[test]
@@ -474,12 +420,13 @@ mod tests {
         )
         .unwrap();
         let settings = settings.normalize();
-        assert_eq!(settings.schema_version, 2);
+        assert_eq!(settings.schema_version, 5);
         assert_eq!(settings.failure_cooldown_seconds, -1);
         assert_eq!(settings.account, "11230909");
         assert_eq!(settings.provider, Provider::ChinaUnicom);
         assert!(settings.auto_start);
-        assert!(!settings.notifications_enabled);
+        assert!(!settings.success_notifications_enabled);
+        assert!(settings.failure_notifications_enabled);
     }
 
     #[test]
