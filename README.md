@@ -6,6 +6,12 @@
 
 去网页右侧的Releases的【latest】里下载就好了
 
+## 最新版界面
+
+<img width="556" height="542" alt="image" src="https://github.com/user-attachments/assets/edd4adff-2d4d-4a55-be73-dc84c826be41" />
+
+
+
 ## 功能
 
 - 自动检测公网，并在瞬时故障后等待 2 秒再次确认。
