@@ -149,39 +149,7 @@ impl AppSettings {
 }
 
 pub fn is_valid_fallback_url(value: &str) -> bool {
-    let value = value.trim();
-    let bytes = value.as_bytes();
-    if bytes.len() < 8 || !bytes[..8].eq_ignore_ascii_case(b"https://") {
-        return false;
-    }
-    let rest = &value[8..];
-    if rest.is_empty() || rest.starts_with('/') || rest.contains('@') || rest.contains('#') {
-        return false;
-    }
-    let authority_end = rest.find(['/', '?']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    valid_authority(authority)
-}
-
-fn valid_authority(authority: &str) -> bool {
-    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
-        return false;
-    }
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) => (host, Some(port)),
-        None => (authority, None),
-    };
-    if host.is_empty()
-        || !host
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
-    {
-        return false;
-    }
-    match port {
-        Some(value) => value.parse::<u16>().map(|port| port != 0).unwrap_or(false),
-        None => true,
-    }
+    crate::network::is_valid_https_url(value)
 }
 
 #[derive(Clone, Debug)]
@@ -437,6 +405,17 @@ mod tests {
         assert!(!is_valid_fallback_url("https://user@example.com/ping"));
         assert!(!is_valid_fallback_url("https://example.com:bad/ping"));
         assert!(!is_valid_fallback_url("https://example.com/#fragment"));
+        assert!(is_valid_fallback_url("https://example.com:8443/ping"));
+        for invalid in [
+            "https://example.com:+443/ping",
+            "https://example.com:0/ping",
+            "https://example.com:65536/ping",
+            "https://example.com/ping\0ignored",
+            "https://example.com/ping\r\nInjected: header",
+            "https://example.com/ping\tother",
+        ] {
+            assert!(!is_valid_fallback_url(invalid), "accepted {invalid:?}");
+        }
     }
 
     #[test]

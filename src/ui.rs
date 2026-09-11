@@ -805,7 +805,11 @@ impl App {
             self.startup.disable()?;
         }
 
-        if let Err(message) = self.settings.replace(candidate) {
+        if let Err(message) = self.settings.update(|current| {
+            // A login can finish while the dialog is saving preferences.
+            candidate.last_successful_login_utc = current.last_successful_login_utc.clone();
+            *current = candidate;
+        }) {
             if startup_was_enabled {
                 let _ = self.startup.enable();
             } else {
@@ -880,6 +884,7 @@ unsafe extern "system" fn window_proc(
                 return LRESULT::default();
             }
             WM_CLOSE => {
+                app.monitor.request_stop();
                 app.request_close_settings_dialog();
                 unsafe {
                     let _ = DestroyWindow(hwnd);

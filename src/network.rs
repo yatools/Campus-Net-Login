@@ -10,6 +10,7 @@ use windows::Win32::Networking::WinHttp::{
     WinHttpSetTimeouts,
 };
 use windows::core::{Error as WindowsError, PCWSTR};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::AppResult;
 use crate::settings::AppSettings;
@@ -86,7 +87,7 @@ impl WinHttpClient {
         let connection = InternetHandle::new(connection, "无法连接目标服务器")?;
 
         let verb = to_wide("GET");
-        let path = to_wide(&parsed.path_and_query);
+        let path = Zeroizing::new(to_wide(&parsed.path_and_query));
         let flags = if parsed.secure {
             WINHTTP_FLAG_SECURE
         } else {
@@ -151,6 +152,14 @@ impl WinHttpClient {
             .map_err(|error| format!("无法读取 HTTP 状态：{error}"))?;
         }
 
+        // Status-only probes must not wait for even one byte of a slow response body.
+        if body_limit == 0 {
+            return Ok(HttpResponse {
+                status_code,
+                body: Vec::new(),
+            });
+        }
+
         let mut body = Vec::with_capacity(body_limit.min(4096));
         while body.len() <= body_limit {
             let remaining = body_limit.saturating_add(1).saturating_sub(body.len());
@@ -171,6 +180,16 @@ impl WinHttpClient {
         }
 
         Ok(HttpResponse { status_code, body })
+    }
+
+    fn login_at(&mut self, url: &str) -> AppResult<()> {
+        let response = self
+            .get(url, 0, 5000)
+            .map_err(|_| "无法连接校园网认证服务器，或登录请求超时。".to_string())?;
+        if !(200..300).contains(&response.status_code) {
+            return Err(format!("登录请求返回 HTTP {}。", response.status_code));
+        }
+        Ok(())
     }
 
     fn logout_at(&mut self, url: &str) -> AppResult<()> {
@@ -215,8 +234,8 @@ impl NetworkBackend for WinHttpClient {
     }
 
     fn login(&mut self, submitted_account: &str, password: &str) -> AppResult<()> {
-        let url = build_login_url(submitted_account, password);
-        self.get(&url, 0, 5000).map(|_| ())
+        let url = Zeroizing::new(build_login_url(submitted_account, password));
+        self.login_at(&url)
     }
 
     fn logout(&mut self) -> AppResult<()> {
@@ -241,6 +260,9 @@ struct ParsedUrl {
 impl ParsedUrl {
     fn parse(value: &str) -> AppResult<Self> {
         let value = value.trim();
+        if value.chars().any(char::is_control) {
+            return Err("网络地址不能包含控制字符。".to_string());
+        }
         let bytes = value.as_bytes();
         let (secure, default_port, rest) =
             if bytes.len() >= 8 && bytes[..8].eq_ignore_ascii_case(b"https://") {
@@ -295,11 +317,23 @@ impl ParsedUrl {
     }
 }
 
+impl Drop for ParsedUrl {
+    fn drop(&mut self) {
+        // Login query strings contain credentials, including after parsing the URL.
+        self.path_and_query.zeroize();
+    }
+}
+
+pub(crate) fn is_valid_https_url(value: &str) -> bool {
+    ParsedUrl::parse(value).is_ok_and(|url| url.secure)
+}
+
 pub fn build_login_url(submitted_account: &str, password: &str) -> String {
+    let encoded_password = Zeroizing::new(percent_encode(password));
     format!(
         "{PORTAL_ENDPOINT}?c=Portal&a=login&login_method=1&user_account={}&user_password={}",
         percent_encode(submitted_account),
-        percent_encode(password)
+        encoded_password.as_str()
     )
 }
 
@@ -351,10 +385,24 @@ pub fn percent_encode(value: &str) -> String {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    fn read_request_headers(stream: &mut TcpStream) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut buffer = [0u8; 512];
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0, "client closed before sending complete headers");
+            request.extend_from_slice(&buffer[..read]);
+            assert!(request.len() <= 8192, "request headers exceeded test limit");
+        }
+    }
 
     #[test]
     fn login_url_percent_encodes_credentials() {
@@ -483,5 +531,72 @@ mod tests {
         server.join().unwrap();
         assert!(result.is_err());
         assert!(elapsed < Duration::from_secs(7));
+    }
+
+    #[test]
+    fn status_only_probe_does_not_wait_for_a_stalled_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (done_sender, done_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request_headers(&mut stream);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 128\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            // Hold the body until the client returns, avoiding timing-only assertions.
+            let _ = done_receiver.recv_timeout(Duration::from_secs(5));
+        });
+        let mut client = WinHttpClient::new().unwrap();
+        let result = client.get(&format!("http://{address}/probe"), 0, 500);
+        let _ = done_sender.send(());
+        server.join().unwrap();
+        let response = result.expect("response headers alone must complete a status-only probe");
+        assert_eq!(response.status_code, 200);
+        assert!(response.body.is_empty());
+    }
+
+    #[test]
+    fn login_rejects_http_errors_and_redirects() {
+        for status in [200, 302, 403, 503] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request_headers(&mut stream);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            let mut client = WinHttpClient::new().unwrap();
+            let result = client.login_at(&format!("http://{address}/login"));
+            server.join().unwrap();
+            if status == 200 {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err(), format!("登录请求返回 HTTP {status}。"));
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_body_keeps_one_extra_byte_to_detect_oversized_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request_headers(&mut stream);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789",
+                )
+                .unwrap();
+        });
+        let mut client = WinHttpClient::new().unwrap();
+        let result = client.get(&format!("http://{address}/probe"), 4, 1000);
+        server.join().unwrap();
+        assert_eq!(result.unwrap().body, b"01234");
     }
 }

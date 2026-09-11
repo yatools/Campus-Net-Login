@@ -117,6 +117,7 @@ enum MonitorCommand {
 
 pub struct MonitorHandle {
     sender: Sender<MonitorCommand>,
+    stopping: Arc<AtomicBool>,
     user_paused: Arc<AtomicBool>,
     failure_paused: Arc<AtomicBool>,
     current: Arc<Mutex<NetworkStatusSnapshot>>,
@@ -130,12 +131,14 @@ impl MonitorHandle {
         event_sink: impl Fn(MonitorEvent) + Send + Sync + 'static,
     ) -> AppResult<Self> {
         let (sender, receiver) = mpsc::channel();
+        let stopping = Arc::new(AtomicBool::new(false));
         let user_paused = Arc::new(AtomicBool::new(false));
         let failure_paused = Arc::new(AtomicBool::new(false));
         let current = Arc::new(Mutex::new(NetworkStatusSnapshot::default()));
         let sink: Arc<dyn Fn(MonitorEvent) + Send + Sync> = Arc::new(event_sink);
 
         let worker_user_paused = Arc::clone(&user_paused);
+        let worker_stopping = Arc::clone(&stopping);
         let worker_failure_paused = Arc::clone(&failure_paused);
         let worker_current = Arc::clone(&current);
         let worker_sink = Arc::clone(&sink);
@@ -149,6 +152,7 @@ impl MonitorHandle {
                         backend,
                         waiter: SystemWaiter,
                         receiver,
+                        stopping: worker_stopping,
                         pending: None,
                         once_consumed: !auto_started,
                         consecutive_failures: 0,
@@ -180,6 +184,7 @@ impl MonitorHandle {
 
         Ok(Self {
             sender,
+            stopping,
             user_paused,
             failure_paused,
             current,
@@ -230,8 +235,13 @@ impl MonitorHandle {
             .clone()
     }
 
-    pub fn stop(&mut self) {
+    pub fn request_stop(&self) {
+        self.stopping.store(true, Ordering::Release);
         let _ = self.sender.send(MonitorCommand::Stop);
+    }
+
+    pub fn stop(&mut self) {
+        self.request_stop();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -271,6 +281,7 @@ struct Worker<B: NetworkBackend, W: CommandWaiter> {
     backend: B,
     waiter: W,
     receiver: Receiver<MonitorCommand>,
+    stopping: Arc<AtomicBool>,
     pending: Option<MonitorCommand>,
     once_consumed: bool,
     consecutive_failures: u32,
@@ -284,6 +295,10 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     fn run(&mut self) {
         let mut next_delay = Duration::ZERO;
         loop {
+            // Stop takes priority over work already queued by repeated menu clicks.
+            if self.stopping.load(Ordering::Acquire) {
+                return;
+            }
             let command = if let Some(command) = self.pending.take() {
                 command
             } else if next_delay.is_zero() {
@@ -328,6 +343,9 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     }
 
     fn execute_detection_cycle(&mut self) -> Duration {
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
         let settings = self.settings.snapshot();
         if !settings.has_credentials() {
             self.publish(NetworkState::NotConfigured, "请先填写账号和密码。");
@@ -342,7 +360,11 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
             return self.normal_interval();
         }
         self.publish(NetworkState::Checking, "正在检测公网连接。");
-        if self.backend.internet_available(&settings) {
+        let online = self.backend.internet_available(&settings);
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
+        if online {
             self.failure_paused.store(false, Ordering::Release);
             self.consecutive_failures = 0;
             self.once_consumed = true;
@@ -353,7 +375,11 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         if !self.sleep_interruptible(Duration::from_secs(2)) {
             return Duration::ZERO;
         }
-        if self.backend.internet_available(&settings) {
+        let online = self.backend.internet_available(&settings);
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
+        if online {
             self.failure_paused.store(false, Ordering::Release);
             self.consecutive_failures = 0;
             self.once_consumed = true;
@@ -367,7 +393,11 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         }
 
         self.publish(NetworkState::Offline, "公网不可用，正在检查认证服务器。");
-        if !self.backend.authentication_server_reachable() {
+        let reachable = self.backend.authentication_server_reachable();
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
+        if !reachable {
             self.publish(
                 NetworkState::AuthServerUnavailable,
                 "无法访问校园网认证服务器。",
@@ -381,6 +411,13 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     }
 
     fn execute_automatic_login(&mut self, settings: &AppSettings) -> Duration {
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
+        if self.is_paused() {
+            self.publish(NetworkState::Paused, "网络不可用，自动重连当前已暂停。");
+            return self.normal_interval();
+        }
         self.once_consumed = true;
         let password = match decrypt_password(&settings.encrypted_password) {
             Ok(password) => password,
@@ -392,23 +429,27 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         };
         let submitted_account = settings.provider.submitted_account(&settings.account);
 
-        self.once_consumed = true;
         self.publish(NetworkState::Authenticating, "正在自动登录。");
-        let _ = self.backend.login(&submitted_account, password.as_str());
+        let login_result = self.backend.login(&submitted_account, password.as_str());
+        drop(password);
         if !self.sleep_interruptible(Duration::from_secs(3)) {
             return Duration::ZERO;
         }
-        if self.backend.internet_available(settings) {
+        let online = self.backend.internet_available(settings);
+        if self.interrupted() {
+            return Duration::ZERO;
+        }
+        // A lost HTTP response does not necessarily mean authentication failed.
+        if online {
             self.record_success();
             return self.normal_interval();
         }
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        self.publish(NetworkState::LoginFailed, "登录后公网仍未恢复。");
-        self.notify(
-            NotificationKind::Error,
-            "校园网登录失败",
-            "公网仍未恢复，请检查账号、密码或运营商。",
-        );
+        let message = login_result
+            .err()
+            .unwrap_or_else(|| "公网仍未恢复，请检查账号、密码或运营商。".to_string());
+        self.publish(NetworkState::LoginFailed, &message);
+        self.notify(NotificationKind::Error, "校园网登录失败", &message);
         if settings.failure_cooldown_seconds < 0 {
             self.failure_paused.store(true, Ordering::Release);
             self.publish(NetworkState::Paused, "登录失败，已按设置停止自动重试。");
@@ -419,6 +460,9 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
     }
 
     fn execute_manual_login(&mut self) {
+        if self.stopping.load(Ordering::Acquire) {
+            return;
+        }
         let settings = self.settings.snapshot();
         if !settings.has_credentials() {
             self.publish(NetworkState::NotConfigured, "请先填写账号和密码。");
@@ -440,24 +484,31 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
 
         self.publish(NetworkState::Authenticating, "正在执行手动重新登录。");
         let submitted = settings.provider.submitted_account(&settings.account);
-        let _ = self.backend.login(&submitted, password.as_str());
+        let login_result = self.backend.login(&submitted, password.as_str());
+        drop(password);
         if !self.sleep_interruptible(Duration::from_secs(3)) {
             return;
         }
-        if self.backend.internet_available(&self.settings.snapshot()) {
+        let online = self.backend.internet_available(&settings);
+        if self.interrupted() {
+            return;
+        }
+        if online {
             self.failure_paused.store(false, Ordering::Release);
             self.record_success();
         } else {
-            self.publish(NetworkState::LoginFailed, "手动登录后公网仍未恢复。");
-            self.notify(
-                NotificationKind::Error,
-                "校园网登录失败",
-                "登录请求已发送，但公网仍未恢复。",
-            );
+            let message = login_result
+                .err()
+                .unwrap_or_else(|| "登录请求已发送，但公网仍未恢复。".to_string());
+            self.publish(NetworkState::LoginFailed, &message);
+            self.notify(NotificationKind::Error, "校园网登录失败", &message);
         }
     }
 
     fn execute_logout(&mut self) {
+        if self.stopping.load(Ordering::Acquire) {
+            return;
+        }
         self.publish(
             NetworkState::LoggingOut,
             "正在向校园网认证服务器发送注销请求。",
@@ -501,7 +552,23 @@ impl<B: NetworkBackend, W: CommandWaiter> Worker<B, W> {
         }
     }
 
+    fn interrupted(&mut self) -> bool {
+        if self.stopping.load(Ordering::Acquire) {
+            self.pending = Some(MonitorCommand::Stop);
+        } else if self.pending.is_none() {
+            match self.receiver.try_recv() {
+                Ok(command) => self.pending = Some(command),
+                Err(mpsc::TryRecvError::Disconnected) => self.pending = Some(MonitorCommand::Stop),
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        self.pending.is_some()
+    }
+
     fn sleep_interruptible(&mut self, duration: Duration) -> bool {
+        if self.interrupted() {
+            return false;
+        }
         match self.waiter.wait(&self.receiver, duration) {
             WaitOutcome::Elapsed => true,
             WaitOutcome::Command(command) => {
@@ -559,6 +626,8 @@ mod tests {
         internet: VecDeque<bool>,
         auth_reachable: bool,
         login_count: usize,
+        login_result: AppResult<()>,
+        after_auth_check: Option<Box<dyn FnMut()>>,
         logout_result: AppResult<()>,
         logout_count: usize,
     }
@@ -571,12 +640,15 @@ mod tests {
         }
 
         fn authentication_server_reachable(&mut self) -> bool {
+            if let Some(callback) = &mut self.after_auth_check {
+                callback();
+            }
             self.auth_reachable
         }
 
         fn login(&mut self, _submitted_account: &str, _password: &str) -> AppResult<()> {
             self.login_count += 1;
-            Ok(())
+            self.login_result.clone()
         }
 
         fn logout(&mut self) -> AppResult<()> {
@@ -588,6 +660,7 @@ mod tests {
     #[derive(Default)]
     struct FakeWaiter {
         delays: Vec<Duration>,
+        sender: Option<Sender<MonitorCommand>>,
     }
 
     impl CommandWaiter for FakeWaiter {
@@ -626,7 +699,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        let (_sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
         let events = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&events);
         let sink: Arc<dyn Fn(MonitorEvent) + Send + Sync> = Arc::new(move |event| {
@@ -639,11 +712,17 @@ mod tests {
                     internet: internet.into_iter().collect(),
                     auth_reachable: true,
                     login_count: 0,
+                    login_result: Ok(()),
+                    after_auth_check: None,
                     logout_result: Ok(()),
                     logout_count: 0,
                 },
-                waiter: FakeWaiter::default(),
+                waiter: FakeWaiter {
+                    sender: Some(sender),
+                    ..Default::default()
+                },
                 receiver,
+                stopping: Arc::new(AtomicBool::new(false)),
                 pending: None,
                 once_consumed: false,
                 consecutive_failures: 0,
@@ -668,6 +747,96 @@ mod tests {
             [20, 20, 40, 80, 160, 320, 640, 1280, 1800, 1800, 1800]
         );
         assert_eq!(failure_delay(&settings, u32::MAX).as_secs(), 1800);
+    }
+
+    #[test]
+    fn commands_received_during_auth_check_prevent_stale_automatic_login() {
+        for command in [
+            MonitorCommand::SettingsChanged,
+            MonitorCommand::PauseChanged,
+            MonitorCommand::Logout,
+            MonitorCommand::Stop,
+        ] {
+            let (mut worker, _, directory) = fixture([false, false], 20);
+            let sender = worker.waiter.sender.as_ref().unwrap().clone();
+            worker.backend.after_auth_check = Some(Box::new(move || {
+                sender.send(command).unwrap();
+            }));
+            assert_eq!(worker.execute_detection_cycle(), Duration::ZERO);
+            assert_eq!(worker.pending, Some(command));
+            assert_eq!(worker.backend.login_count, 0);
+            assert!(!worker.once_consumed);
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn stop_during_auth_check_takes_priority_over_queued_work() {
+        let (mut worker, _, directory) = fixture([false, false], 20);
+        let stopping = Arc::clone(&worker.stopping);
+        let sender = worker.waiter.sender.as_ref().unwrap().clone();
+        worker.backend.after_auth_check = Some(Box::new(move || {
+            sender.send(MonitorCommand::ManualLogin).unwrap();
+            stopping.store(true, Ordering::Release);
+        }));
+        assert_eq!(worker.execute_detection_cycle(), Duration::ZERO);
+        assert_eq!(worker.pending, Some(MonitorCommand::Stop));
+        worker.run();
+        assert_eq!(worker.backend.login_count, 0);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn queued_detection_does_not_discard_explicit_logout() {
+        let (mut worker, _, directory) = fixture([], 20);
+        worker
+            .waiter
+            .sender
+            .as_ref()
+            .unwrap()
+            .send(MonitorCommand::Detect)
+            .unwrap();
+        worker.execute_logout();
+        assert_eq!(worker.backend.logout_count, 1);
+        assert!(worker.user_paused.load(Ordering::Acquire));
+        assert_eq!(worker.receiver.try_recv().unwrap(), MonitorCommand::Detect);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn automatic_and_manual_login_report_request_errors_when_still_offline() {
+        for manual in [false, true] {
+            let (mut worker, _, directory) = fixture([false], 20);
+            let message = "登录请求返回 HTTP 503。";
+            worker.backend.login_result = Err(message.to_string());
+            if manual {
+                worker.execute_manual_login();
+            } else {
+                worker.execute_automatic_login(&worker.settings.snapshot());
+            }
+            let status = worker.current.lock().unwrap();
+            assert_eq!(status.state, NetworkState::LoginFailed);
+            assert_eq!(status.message, message);
+            assert_eq!(worker.backend.login_count, 1);
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+
+    #[test]
+    fn restored_connectivity_wins_over_a_lost_login_response() {
+        for manual in [false, true] {
+            let (mut worker, manager, directory) = fixture([true], 20);
+            worker.backend.login_result = Err("登录请求超时。".to_string());
+            if manual {
+                worker.execute_manual_login();
+            } else {
+                worker.execute_automatic_login(&worker.settings.snapshot());
+            }
+            assert_eq!(worker.current.lock().unwrap().state, NetworkState::Online);
+            assert!(manager.snapshot().last_successful_login_utc.is_some());
+            assert_eq!(worker.consecutive_failures, 0);
+            let _ = fs::remove_dir_all(directory);
+        }
     }
 
     #[test]
