@@ -1,6 +1,10 @@
 # 南湖校园网自动登录
 
-面向 Windows 10/11 x64 的轻量原生托盘程序。程序使用 Rust 和 Windows 自带接口实现，发布物只有一个 EXE。
+面向 Windows 10/11 x64 的轻量原生托盘程序。程序使用 Rust 和 Windows 自带接口实现。
+
+## 下载
+
+去网页右侧的Releases的【latest】里下载就好了
 
 ## 功能
 
@@ -34,14 +38,14 @@
 - 继续读取 `%LocalAppData%\CampusNetAutoLogin\settings.json` 的 schema v1/v2/v3/v4/v5；已移除按时段、星期自动暂停的功能，旧配置中的相关字段不再生效，保存时会移除。
 - 沿用 `CampusNetAutoLogin/v1/CurrentUser` DPAPI entropy，旧版保存的密码无需重输。
 - 自启项名称为 `CampusNetAutoLogin`，命令保留 `--autostart` 参数；EXE 移动后，下次启动会自动更新启动项中的程序路径。
-- 不创建或读取 Windows 任务计划，也不获取当前用户 SID；注册表通过原生 Windows API 直接操作。
+- 注册表通过原生 Windows API 直接操作。
 - 配置通过同目录临时文件、落盘刷新和原子替换保存。
 
 
 ## TODO
-加一个保存后提示右下角右键托盘可手动登录的提示/动画
 
 加一个清除系统代理登录的功能
+
 ......
 
 
@@ -83,4 +87,4 @@ cargo build --release --locked
 - 配置：`%LocalAppData%\CampusNetAutoLogin\settings.json`
 - 自启：`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 中的 `CampusNetAutoLogin`
 
-程序空闲时不写日志、不解压运行库，也不调用 `curl`、`ping`、`reg.exe`、PowerShell、CMD 或 `schtasks.exe`。
+程序空闲时不写日志、不调用 `curl`、`ping`、`reg.exe`、PowerShell、CMD 或 `schtasks.exe`。
