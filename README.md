@@ -7,8 +7,9 @@
 去网页右侧的Releases的【latest】里下载就好了
 
 ## 最新版界面
+<img width="812" height="793" alt="image" src="https://github.com/user-attachments/assets/03a1b931-3c7a-488e-987f-31c1f5ce46b9" />
 
-<img width="556" height="542" alt="image" src="https://github.com/user-attachments/assets/edd4adff-2d4d-4a55-be73-dc84c826be41" />
+
 
 
 
