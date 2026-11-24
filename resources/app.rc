@@ -21,16 +21,20 @@
 #define IDC_COOLDOWN_SPIN 1014
 #define IDC_SECURITY_NOTICE 1015
 #define IDC_COOLDOWN_FRAME 1027
-#define IDC_LOGIN_ONCE 1016
 #define IDC_GITHUB 1018
+#define IDC_PASSWORD_TOGGLE 1028
+#define IDC_TRIGGER_PERIODIC 1029
+#define IDC_TRIGGER_AUTOSTART 1030
+#define IDC_TRIGGER_RESUME 1031
+#define IDC_TRIGGER_UNLOCK 1032
 
 IDI_BLUE ICON "resources/assets/campus-blue.ico"
 IDI_RED ICON "resources/assets/campus-red.ico"
 1 RT_MANIFEST "resources/app.manifest"
 
 1 VERSIONINFO
-FILEVERSION 2,0,0,0
-PRODUCTVERSION 2,0,0,0
+FILEVERSION 2,1,0,0
+PRODUCTVERSION 2,1,0,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS 0x40004L
@@ -43,11 +47,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "南湖校园网自动登录项目\0"
             VALUE "FileDescription", "南湖校园网自动登录\0"
-            VALUE "FileVersion", "2.0.0.0\0"
+            VALUE "FileVersion", "2.1.0.0\0"
             VALUE "InternalName", "CampusNetAutoLogin\0"
             VALUE "OriginalFilename", "CampusNetAutoLogin.exe\0"
             VALUE "ProductName", "南湖校园网自动登录\0"
-            VALUE "ProductVersion", "2.0.0\0"
+            VALUE "ProductVersion", "2.1.0\0"
         END
     END
     BLOCK "VarFileInfo"
@@ -68,6 +72,7 @@ BEGIN
 
     LTEXT           "密码", -1, 10, 35, 74, 12
     EDITTEXT        IDC_PASSWORD, 88, 33, 185, 16, ES_PASSWORD | ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "显示", IDC_PASSWORD_TOGGLE, 277, 33, 36, 16, WS_TABSTOP
 
     LTEXT           "服务商", -1, 10, 56, 74, 12
     COMBOBOX        IDC_PROVIDER, 88, 54, 82, 82, CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
@@ -87,21 +92,26 @@ BEGIN
     LTEXT           "国内备用探测", -1, 10, 119, 74, 12
     EDITTEXT        IDC_FALLBACK, 88, 117, 230, 16, ES_AUTOHSCROLL | WS_TABSTOP
 
-    LTEXT           "开机自启", -1, 10, 143, 74, 12
-    CONTROL         "用户登录 Windows 后自动启动", IDC_AUTOSTART, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 139, 262, 16
-    CONTROL         "仅开机自启时自动登录一次（不再自动检测/重试）", IDC_LOGIN_ONCE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 159, 262, 16
+    LTEXT           "开机自启", -1, 10, 139, 74, 11
+    CONTROL         "用户登录 Windows 后自动启动", IDC_AUTOSTART, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 137, 262, 14
 
-    LTEXT           "通知", -1, 10, 185, 74, 12
-    CONTROL         "显示成功通知", IDC_NOTIFY_SUCCESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 181, 100, 16
-    CONTROL         "显示失败通知", IDC_NOTIFY_FAILURE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 208, 181, 100, 16
+    LTEXT           "自动触发", -1, 10, 156, 74, 11
+    CONTROL         "定时循环检测", IDC_TRIGGER_PERIODIC, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 154, 108, 14
+    CONTROL         "开机自启时检测一次", IDC_TRIGGER_AUTOSTART, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 208, 154, 142, 14
+    CONTROL         "休眠唤醒时检测", IDC_TRIGGER_RESUME, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 170, 108, 14
+    CONTROL         "锁屏解锁时检测", IDC_TRIGGER_UNLOCK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 208, 170, 142, 14
 
-    LTEXT           "最近成功登录", -1, 10, 201, 68, 12
-    LTEXT           "暂无", IDC_LAST_LOGIN, 88, 201, 262, 12, SS_LEFTNOWORDWRAP
-    LTEXT           "当前网络状态", -1, 10, 220, 72, 12
-    LTEXT           "等待检测", IDC_STATUS, 88, 220, 262, 18, SS_LEFT
+    LTEXT           "通知", -1, 10, 190, 74, 11
+    CONTROL         "显示成功通知", IDC_NOTIFY_SUCCESS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 88, 188, 100, 14
+    CONTROL         "显示失败通知", IDC_NOTIFY_FAILURE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 208, 188, 100, 14
 
-    LTEXT           "密码使用 Windows 当前用户身份加密保存；校园网认证接口为 HTTP。", IDC_SECURITY_NOTICE, 10, 240, 340, 12, SS_LEFT
-    LTEXT           "保存后软件会缩小为托盘，右键托盘可手动连接、注销或返回设置", -1, 10, 258, 340, 12, SS_LEFT
+    LTEXT           "最近成功登录", -1, 10, 207, 68, 11
+    LTEXT           "暂无", IDC_LAST_LOGIN, 88, 207, 262, 11, SS_LEFTNOWORDWRAP
+    LTEXT           "当前网络状态", -1, 10, 223, 72, 11
+    LTEXT           "等待检测", IDC_STATUS, 88, 223, 262, 18, SS_LEFT
+
+    LTEXT           "密码使用 Windows 当前用户身份加密保存；校园网认证接口为 HTTP。", IDC_SECURITY_NOTICE, 10, 244, 340, 11, SS_LEFT
+    LTEXT           "保存后软件会缩小为托盘，点击托盘可查看状态、手动连接或返回设置", -1, 10, 259, 340, 11, SS_LEFT
 
     CONTROL         "⚠ 清除所有数据并退出", IDC_CLEAR_DATA, "Button", BS_OWNERDRAW | WS_TABSTOP, 10, 276, 122, 19
     PUSHBUTTON      "关闭", IDCANCEL, 140, 276, 100, 19

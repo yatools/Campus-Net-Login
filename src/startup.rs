@@ -67,6 +67,18 @@ impl StartupManager {
         registry_result(result, "无法删除当前用户开机启动项")
     }
 
+    /// Synchronizes the HKCU Run entry only when its state differs from `enabled`.
+    pub fn sync_if_needed(&self, enabled: bool) -> AppResult<()> {
+        if enabled {
+            if !self.is_enabled() {
+                self.enable()?;
+            }
+        } else if self.read_command()?.is_some() {
+            self.disable()?;
+        }
+        Ok(())
+    }
+
     fn is_enabled_inner(&self) -> AppResult<bool> {
         let Some(command) = self.read_command()? else {
             return Ok(false);
@@ -161,6 +173,14 @@ mod tests {
             manager.read_command().unwrap().as_deref(),
             Some(manager.command_line().as_str())
         );
+        assert!(manager.is_enabled());
+        manager.sync_if_needed(true).unwrap();
+        assert!(manager.is_enabled());
+        manager.sync_if_needed(false).unwrap();
+        assert!(!manager.is_enabled());
+        manager.sync_if_needed(false).unwrap();
+        assert!(!manager.is_enabled());
+        manager.sync_if_needed(true).unwrap();
         assert!(manager.is_enabled());
         manager.disable().unwrap();
         assert!(!manager.is_enabled());

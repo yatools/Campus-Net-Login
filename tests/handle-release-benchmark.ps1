@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Executable = (Join-Path $PSScriptRoot '..\publish\南湖校园网自动登陆.exe'),
     [ValidateRange(1, 15)]
     [int]$ActiveMinutes = 10,
@@ -101,7 +101,7 @@ $encrypted = [Security.Cryptography.ProtectedData]::Protect(
     $entropy,
     [Security.Cryptography.DataProtectionScope]::CurrentUser)
 $settings = [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 6
     account = 'HANDLE_BENCHMARK_ONLY'
     provider = 'Campus'
     encryptedPassword = [Convert]::ToBase64String($encrypted)
@@ -109,7 +109,12 @@ $settings = [ordered]@{
     failureCooldownSeconds = 300
     fallbackProbeUrl = 'https://www.baidu.com/favicon.ico'
     autoStart = $false
-    successNotification = $false
+    triggerPeriodic = $true
+    triggerOnAutostart = $true
+    triggerOnResume = $false
+    triggerOnUnlock = $false
+    successNotificationsEnabled = $false
+    failureNotificationsEnabled = $false
     lastSuccessfulLoginUtc = $null
 }
 [IO.File]::WriteAllText(

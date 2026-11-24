@@ -77,6 +77,9 @@ public static class CampusUiSmokeNative
     public static extern uint GetGuiResources(IntPtr process, uint flags);
 
     [DllImport("user32.dll")]
+    public static extern bool IsWindowEnabled(IntPtr window);
+
+    [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -183,10 +186,59 @@ try {
         [CampusUiSmokeNative]::ItemText($dialog, 1005) -ne '20') {
         throw '默认检测间隔或失败冷却不正确。'
     }
-    foreach ($controlId in @(1016, 1018, 1019)) {
+    if ([CampusUiSmokeNative]::GetDlgItem($dialog, 1016) -ne [IntPtr]::Zero) {
+        throw '旧控件 IDC_LOGIN_ONCE (1016) 尚未移除。'
+    }
+    foreach ($controlId in @(1018, 1019, 1028, 1029, 1030, 1031, 1032)) {
         if ([CampusUiSmokeNative]::GetDlgItem($dialog, $controlId) -eq [IntPtr]::Zero) {
             throw "新增设置控件不存在：$controlId"
         }
+    }
+    $periodicChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1029), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    $autostartTriggerChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1030), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    $resumeChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1031), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    $unlockChecked = [CampusUiSmokeNative]::SendMessage([CampusUiSmokeNative]::GetDlgItem($dialog, 1032), 0x00F0, [UIntPtr]::Zero, [IntPtr]::Zero).ToInt64()
+    if ($periodicChecked -ne 1 -or $autostartTriggerChecked -ne 1 -or $resumeChecked -ne 1 -or $unlockChecked -ne 0) {
+        throw "自动触发默认状态不正确：1029=$periodicChecked, 1030=$autostartTriggerChecked, 1031=$resumeChecked, 1032=$unlockChecked"
+    }
+
+    $passwordToggle = [CampusUiSmokeNative]::GetDlgItem($dialog, 1028)
+    if ([CampusUiSmokeNative]::ItemText($dialog, 1028) -ne '显示') {
+        throw '密码切换按钮初始文案应为“显示”。'
+    }
+    [void][CampusUiSmokeNative]::SendMessage($passwordToggle, 0x00F5, [UIntPtr]::Zero, [IntPtr]::Zero)
+    if ([CampusUiSmokeNative]::ItemText($dialog, 1028) -ne '隐藏') {
+        throw '点击“显示”后按钮文案未切换为“隐藏”。'
+    }
+    [void][CampusUiSmokeNative]::SendMessage($passwordToggle, 0x00F5, [UIntPtr]::Zero, [IntPtr]::Zero)
+    if ([CampusUiSmokeNative]::ItemText($dialog, 1028) -ne '显示') {
+        throw '再次点击后按钮文案未恢复为“显示”。'
+    }
+
+    $periodicCheck = [CampusUiSmokeNative]::GetDlgItem($dialog, 1029)
+    $intervalEdit = [CampusUiSmokeNative]::GetDlgItem($dialog, 1004)
+    $cooldownEdit = [CampusUiSmokeNative]::GetDlgItem($dialog, 1005)
+    $intervalSpinCheck = [CampusUiSmokeNative]::GetDlgItem($dialog, 1013)
+    $cooldownSpinCheck = [CampusUiSmokeNative]::GetDlgItem($dialog, 1014)
+    if (-not [CampusUiSmokeNative]::IsWindowEnabled($intervalEdit) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($cooldownEdit) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($intervalSpinCheck) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($cooldownSpinCheck)) {
+        throw '定时检测默认开启时，检测间隔与失败冷却控件应处于可用状态。'
+    }
+    [void][CampusUiSmokeNative]::SendMessage($periodicCheck, 0x00F5, [UIntPtr]::Zero, [IntPtr]::Zero)
+    if ([CampusUiSmokeNative]::IsWindowEnabled($intervalEdit) -or
+        [CampusUiSmokeNative]::IsWindowEnabled($cooldownEdit) -or
+        [CampusUiSmokeNative]::IsWindowEnabled($intervalSpinCheck) -or
+        [CampusUiSmokeNative]::IsWindowEnabled($cooldownSpinCheck)) {
+        throw '取消勾选定时检测后，检测间隔与失败冷却控件未禁用。'
+    }
+    [void][CampusUiSmokeNative]::SendMessage($periodicCheck, 0x00F5, [UIntPtr]::Zero, [IntPtr]::Zero)
+    if (-not [CampusUiSmokeNative]::IsWindowEnabled($intervalEdit) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($cooldownEdit) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($intervalSpinCheck) -or
+        -not [CampusUiSmokeNative]::IsWindowEnabled($cooldownSpinCheck)) {
+        throw '重新勾选定时检测后，检测间隔与失败冷却控件未恢复启用。'
     }
     if ([CampusUiSmokeNative]::ItemText($dialog, 1008) -ne '显示成功通知' -or
         [CampusUiSmokeNative]::ItemText($dialog, 1019) -ne '显示失败通知') {
@@ -242,11 +294,29 @@ try {
     if ([CampusUiSmokeNative]::GetDlgItem($dialog, 1012) -ne [IntPtr]::Zero) {
         throw '实际提交账号栏仍然存在。'
     }
+    $passwordRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1002))
+    $toggleRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1028))
+    if ($toggleRect.Left -le $passwordRect.Right -or $toggleRect.Top -ne $passwordRect.Top) {
+        throw '密码显隐切换按钮排列不正确。'
+    }
     $startupRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1007))
-    $onceRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1016))
+    $periodicRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1029))
+    $autostartTriggerRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1030))
+    $resumeRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1031))
+    $unlockRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1032))
     $notifyRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1008))
-    if ($startupRect.Left -ne $onceRect.Left -or $onceRect.Top -le $startupRect.Top -or $notifyRect.Top -le $onceRect.Top) {
-        throw '自启与通知选项排列不正确。'
+    $notifyFailureRect = [CampusUiSmokeNative]::Rectangle([CampusUiSmokeNative]::GetDlgItem($dialog, 1019))
+    if ($startupRect.Left -ne $periodicRect.Left -or
+        $periodicRect.Left -ne $resumeRect.Left -or
+        $resumeRect.Left -ne $notifyRect.Left -or
+        $autostartTriggerRect.Left -ne $unlockRect.Left -or
+        $unlockRect.Left -ne $notifyFailureRect.Left -or
+        $periodicRect.Top -ne $autostartTriggerRect.Top -or
+        $resumeRect.Top -ne $unlockRect.Top -or
+        $periodicRect.Top -le $startupRect.Top -or
+        $resumeRect.Top -le $periodicRect.Top -or
+        $notifyRect.Top -le $resumeRect.Top) {
+        throw '自启、自动触发与通知选项排列不正确。'
     }
     if ($securityNotice -notmatch 'Windows' -or $securityNotice -notmatch 'HTTP') {
         throw "安全说明缺失：$securityNotice"

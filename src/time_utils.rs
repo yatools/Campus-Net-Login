@@ -77,4 +77,31 @@ mod tests {
             "校园网不是时间戳字符串"
         );
     }
+
+    #[test]
+    fn formats_valid_utc_rfc3339_and_parses_back() {
+        let timestamp = now_utc_rfc3339();
+        assert_eq!(timestamp.len(), 24);
+        assert!(timestamp.ends_with('Z'));
+        assert_eq!(&timestamp[4..5], "-");
+        assert_eq!(&timestamp[7..8], "-");
+        assert_eq!(&timestamp[10..11], "T");
+        assert_eq!(&timestamp[13..14], ":");
+        assert_eq!(&timestamp[16..17], ":");
+        assert_eq!(&timestamp[19..20], ".");
+
+        let parsed = parse_utc_system_time(&timestamp).expect("generated timestamp must parse");
+        assert!(parsed.wYear >= 2020);
+        assert!((1..=12).contains(&parsed.wMonth));
+        assert!((1..=31).contains(&parsed.wDay));
+
+        assert_eq!(display_local_time(None), "暂无");
+        let displayed = display_local_time(Some("2026-01-15T08:30:45.123Z"));
+        assert_eq!(displayed.len(), 19);
+        assert_eq!(&displayed[4..5], "-");
+        assert_eq!(&displayed[7..8], "-");
+        assert_eq!(&displayed[10..11], " ");
+        assert_eq!(&displayed[13..14], ":");
+        assert_eq!(&displayed[16..17], ":");
+    }
 }

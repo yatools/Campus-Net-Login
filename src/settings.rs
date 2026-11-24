@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -17,6 +17,8 @@ pub const PROJECT_URL: &str = "https://github.com/yatools/Campus-Net-Login";
 
 pub const APP_NAME: &str = "CampusNetAutoLogin";
 pub const DEFAULT_FALLBACK_PROBE_URL: &str = "https://www.baidu.com/favicon.ico";
+const CURRENT_SCHEMA_VERSION: i32 = 6;
+const CORRUPT_BACKUP_WARNING: &str = "配置文件已损坏，已备份为 settings.json.corrupt 并恢复默认设置，请重新填写账号和密码。";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Provider {
@@ -69,8 +71,53 @@ impl Provider {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+struct RawAppSettings {
+    schema_version: Option<i32>,
+    account: String,
+    provider: Provider,
+    encrypted_password: String,
+    check_interval_seconds: i32,
+    failure_cooldown_seconds: i32,
+    fallback_probe_url: String,
+    auto_start: bool,
+    success_notifications_enabled: bool,
+    failure_notifications_enabled: bool,
+    autostart_login_once: Option<bool>,
+    trigger_periodic: Option<bool>,
+    trigger_on_autostart: Option<bool>,
+    trigger_on_resume: Option<bool>,
+    trigger_on_unlock: Option<bool>,
+    last_successful_login_utc: Option<String>,
+}
+
+impl Default for RawAppSettings {
+    fn default() -> Self {
+        let defaults = AppSettings::default();
+        Self {
+            schema_version: None,
+            account: defaults.account,
+            provider: defaults.provider,
+            encrypted_password: defaults.encrypted_password,
+            check_interval_seconds: defaults.check_interval_seconds,
+            failure_cooldown_seconds: defaults.failure_cooldown_seconds,
+            fallback_probe_url: defaults.fallback_probe_url,
+            auto_start: defaults.auto_start,
+            success_notifications_enabled: defaults.success_notifications_enabled,
+            failure_notifications_enabled: defaults.failure_notifications_enabled,
+            autostart_login_once: None,
+            trigger_periodic: None,
+            trigger_on_autostart: None,
+            trigger_on_resume: None,
+            trigger_on_unlock: None,
+            last_successful_login_utc: defaults.last_successful_login_utc,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", from = "RawAppSettings")]
 pub struct AppSettings {
     pub schema_version: i32,
     pub account: String,
@@ -82,14 +129,68 @@ pub struct AppSettings {
     pub auto_start: bool,
     pub success_notifications_enabled: bool,
     pub failure_notifications_enabled: bool,
-    pub autostart_login_once: bool,
+    pub trigger_periodic: bool,
+    pub trigger_on_autostart: bool,
+    pub trigger_on_resume: bool,
+    pub trigger_on_unlock: bool,
     pub last_successful_login_utc: Option<String>,
+}
+
+impl From<RawAppSettings> for AppSettings {
+    fn from(raw: RawAppSettings) -> Self {
+        let defaults = AppSettings::default();
+        let raw_version = raw.schema_version.unwrap_or(0);
+        let mut failure_cooldown_seconds = raw.failure_cooldown_seconds;
+        if raw_version < 2 && failure_cooldown_seconds == 0 {
+            failure_cooldown_seconds = -1;
+        }
+
+        let (trigger_periodic, trigger_on_autostart, trigger_on_resume, trigger_on_unlock) =
+            if raw_version < CURRENT_SCHEMA_VERSION
+                && raw.trigger_periodic.is_none()
+                && raw.trigger_on_autostart.is_none()
+                && raw.trigger_on_resume.is_none()
+                && raw.trigger_on_unlock.is_none()
+            {
+                if raw.autostart_login_once == Some(true) {
+                    (false, true, false, false)
+                } else {
+                    (true, true, true, false)
+                }
+            } else {
+                (
+                    raw.trigger_periodic.unwrap_or(defaults.trigger_periodic),
+                    raw.trigger_on_autostart
+                        .unwrap_or(defaults.trigger_on_autostart),
+                    raw.trigger_on_resume.unwrap_or(defaults.trigger_on_resume),
+                    raw.trigger_on_unlock.unwrap_or(defaults.trigger_on_unlock),
+                )
+            };
+
+        Self {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            account: raw.account,
+            provider: raw.provider,
+            encrypted_password: raw.encrypted_password,
+            check_interval_seconds: raw.check_interval_seconds,
+            failure_cooldown_seconds,
+            fallback_probe_url: raw.fallback_probe_url,
+            auto_start: raw.auto_start,
+            success_notifications_enabled: raw.success_notifications_enabled,
+            failure_notifications_enabled: raw.failure_notifications_enabled,
+            trigger_periodic,
+            trigger_on_autostart,
+            trigger_on_resume,
+            trigger_on_unlock,
+            last_successful_login_utc: raw.last_successful_login_utc,
+        }
+    }
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            schema_version: 5,
+            schema_version: CURRENT_SCHEMA_VERSION,
             account: String::new(),
             provider: Provider::Campus,
             encrypted_password: String::new(),
@@ -99,7 +200,10 @@ impl Default for AppSettings {
             auto_start: false,
             success_notifications_enabled: false,
             failure_notifications_enabled: true,
-            autostart_login_once: false,
+            trigger_periodic: true,
+            trigger_on_autostart: true,
+            trigger_on_resume: true,
+            trigger_on_unlock: false,
             last_successful_login_utc: None,
         }
     }
@@ -110,7 +214,7 @@ impl AppSettings {
         if self.schema_version < 2 && self.failure_cooldown_seconds == 0 {
             self.failure_cooldown_seconds = -1;
         }
-        self.schema_version = 5;
+        self.schema_version = CURRENT_SCHEMA_VERSION;
         self.account = self.account.trim().to_string();
         self.check_interval_seconds = self.check_interval_seconds.clamp(10, 3600);
         self.failure_cooldown_seconds = self.failure_cooldown_seconds.clamp(-1, 3600);
@@ -123,6 +227,13 @@ impl AppSettings {
 
     pub fn has_credentials(&self) -> bool {
         !self.account.trim().is_empty() && !self.encrypted_password.trim().is_empty()
+    }
+
+    pub fn has_any_auto_trigger(&self) -> bool {
+        self.trigger_periodic
+            || self.trigger_on_autostart
+            || self.trigger_on_resume
+            || self.trigger_on_unlock
     }
 
     pub fn validate(&self, require_password: bool) -> Vec<String> {
@@ -180,13 +291,27 @@ impl SettingsStore {
         self.path.parent().unwrap_or_else(|| Path::new("."))
     }
 
+    pub fn load_with_warning(&self) -> (AppSettings, Option<String>) {
+        match fs::read(&self.path) {
+            Ok(bytes) => {
+                if let Ok(settings) = serde_json::from_slice::<AppSettings>(&bytes) {
+                    return (settings.normalize(), None);
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return (AppSettings::default(), None);
+            }
+            Err(_) => {}
+        }
+        let _ = fs::copy(&self.path, self.path.with_extension("json.corrupt"));
+        (
+            AppSettings::default(),
+            Some(CORRUPT_BACKUP_WARNING.to_string()),
+        )
+    }
+
     pub fn load(&self) -> AppSettings {
-        let Ok(bytes) = fs::read(&self.path) else {
-            return AppSettings::default();
-        };
-        serde_json::from_slice::<AppSettings>(&bytes)
-            .unwrap_or_default()
-            .normalize()
+        self.load_with_warning().0
     }
 
     pub fn save(&self, settings: &AppSettings) -> AppResult<()> {
@@ -244,6 +369,8 @@ impl SettingsStore {
         }
         let temporary = self.path.with_extension("json.tmp");
         let _ = fs::remove_file(temporary);
+        let corrupt = self.path.with_extension("json.corrupt");
+        let _ = fs::remove_file(corrupt);
         Ok(())
     }
 }
@@ -254,12 +381,19 @@ pub struct SettingsManager {
 }
 
 impl SettingsManager {
+    pub fn new_with_warning(store: SettingsStore) -> (Self, Option<String>) {
+        let (current, warning) = store.load_with_warning();
+        (
+            Self {
+                store,
+                current: Mutex::new(current),
+            },
+            warning,
+        )
+    }
+
     pub fn new(store: SettingsStore) -> Self {
-        let current = store.load();
-        Self {
-            store,
-            current: Mutex::new(current),
-        }
+        Self::new_with_warning(store).0
     }
 
     pub fn snapshot(&self) -> AppSettings {
@@ -321,15 +455,27 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("{prefix}-{id}"))
+    }
+
     #[test]
     fn removed_schedule_fields_are_ignored_and_not_saved_again() {
-        let old: AppSettings = serde_json::from_str(r#"{"schemaVersion":3,"account":"123","pausePeriods":"23:33-07:30","pauseWeekdays":[true,true,true,true,true,true,true]}"#).unwrap();
+        let old: AppSettings = serde_json::from_str(
+            r#"{"schemaVersion":3,"account":"123","pausePeriods":"23:33-07:30","pauseWeekdays":[true,true,true,true,true,true,true]}"#,
+        )
+        .unwrap();
         let settings = old.normalize();
         assert_eq!(settings.account, "123");
-        assert_eq!(settings.schema_version, 5);
+        assert_eq!(settings.schema_version, 6);
         let json = serde_json::to_string(&settings).unwrap();
         assert!(!json.contains("pausePeriods"));
         assert!(!json.contains("pauseWeekdays"));
+        assert!(!json.contains("autostartLoginOnce"));
     }
 
     #[test]
@@ -347,14 +493,14 @@ mod tests {
             let settings = AppSettings {
                 success_notifications_enabled: success,
                 failure_notifications_enabled: failure,
-                autostart_login_once: true,
+                trigger_on_unlock: true,
                 ..Default::default()
             };
             let json = serde_json::to_string(&settings).unwrap();
             let restored: AppSettings = serde_json::from_str(&json).unwrap();
             assert_eq!(restored.success_notifications_enabled, success);
             assert_eq!(restored.failure_notifications_enabled, failure);
-            assert!(restored.autostart_login_once);
+            assert!(restored.trigger_on_unlock);
             assert_eq!(restored.check_interval_seconds, 1800);
             assert_eq!(restored.failure_cooldown_seconds, 20);
         }
@@ -388,13 +534,110 @@ mod tests {
         )
         .unwrap();
         let settings = settings.normalize();
-        assert_eq!(settings.schema_version, 5);
+        assert_eq!(settings.schema_version, 6);
         assert_eq!(settings.failure_cooldown_seconds, -1);
         assert_eq!(settings.account, "11230909");
         assert_eq!(settings.provider, Provider::ChinaUnicom);
         assert!(settings.auto_start);
         assert!(!settings.success_notifications_enabled);
         assert!(settings.failure_notifications_enabled);
+        assert!(settings.trigger_periodic);
+        assert!(settings.trigger_on_autostart);
+        assert!(settings.trigger_on_resume);
+        assert!(!settings.trigger_on_unlock);
+    }
+
+    #[test]
+    fn v5_autostart_login_once_true_migrates_to_autostart_only_trigger() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": 5,
+                "account": "11230909",
+                "autostartLoginOnce": true
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.schema_version, 6);
+        assert!(!settings.trigger_periodic);
+        assert!(settings.trigger_on_autostart);
+        assert!(!settings.trigger_on_resume);
+        assert!(!settings.trigger_on_unlock);
+        assert!(settings.has_any_auto_trigger());
+
+        let json = serde_json::to_string(&settings.normalize()).unwrap();
+        assert!(!json.contains("autostartLoginOnce"));
+        assert!(json.contains("\"schemaVersion\":6"));
+    }
+
+    #[test]
+    fn v5_autostart_login_once_false_migrates_to_default_triggers() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": 5,
+                "account": "11230909",
+                "autostartLoginOnce": false
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.schema_version, 6);
+        assert!(settings.trigger_periodic);
+        assert!(settings.trigger_on_autostart);
+        assert!(settings.trigger_on_resume);
+        assert!(!settings.trigger_on_unlock);
+        assert!(settings.has_any_auto_trigger());
+    }
+
+    #[test]
+    fn v6_explicit_false_triggers_are_preserved_across_round_trip() {
+        let settings = AppSettings {
+            account: "11230909".to_string(),
+            trigger_periodic: false,
+            trigger_on_autostart: false,
+            trigger_on_resume: false,
+            trigger_on_unlock: false,
+            ..Default::default()
+        };
+        assert!(!settings.has_any_auto_trigger());
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored = serde_json::from_str::<AppSettings>(&json)
+            .unwrap()
+            .normalize();
+        assert_eq!(restored.schema_version, 6);
+        assert!(!restored.trigger_periodic);
+        assert!(!restored.trigger_on_autostart);
+        assert!(!restored.trigger_on_resume);
+        assert!(!restored.trigger_on_unlock);
+        assert!(!restored.has_any_auto_trigger());
+    }
+
+    #[test]
+    fn corrupt_settings_file_is_backed_up_and_reports_warning() {
+        let directory = temp_dir("CampusNetAutoLogin-Corrupt-Test");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("settings.json");
+        let corrupt_content = b"{not valid json!!!";
+        fs::write(&path, corrupt_content).unwrap();
+
+        let store = SettingsStore::new(path.clone());
+        let (manager, warning) = SettingsManager::new_with_warning(store.clone());
+        assert_eq!(warning.as_deref(), Some(CORRUPT_BACKUP_WARNING));
+        assert_eq!(manager.snapshot().schema_version, 6);
+        assert!(!manager.snapshot().has_credentials());
+
+        let backup_path = path.with_extension("json.corrupt");
+        assert!(backup_path.exists());
+        assert_eq!(fs::read(&backup_path).unwrap(), corrupt_content);
+
+        store.clear().unwrap();
+        assert!(!path.exists());
+        assert!(!backup_path.exists());
+
+        let (missing_settings, missing_warning) = store.load_with_warning();
+        assert!(missing_warning.is_none());
+        assert_eq!(missing_settings.schema_version, 6);
+
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -420,11 +663,7 @@ mod tests {
 
     #[test]
     fn store_round_trip_is_atomic_and_compatible() {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = env::temp_dir().join(format!("CampusNetAutoLogin-Rust-Test-{id}"));
+        let directory = temp_dir("CampusNetAutoLogin-Rust-Test");
         let store = SettingsStore::new(directory.join("settings.json"));
         let settings = AppSettings {
             account: "11230909".to_string(),
@@ -433,13 +672,16 @@ mod tests {
             ..Default::default()
         };
         store.save(&settings).unwrap();
-        let loaded = store.load();
+        let (loaded, warning) = store.load_with_warning();
+        assert!(warning.is_none());
         assert_eq!(loaded.account, "11230909");
         assert_eq!(loaded.provider, Provider::ChinaMobile);
+        assert_eq!(loaded.schema_version, 6);
         assert!(!store.path().with_extension("json.tmp").exists());
         let json = fs::read_to_string(store.path()).unwrap();
         assert!(json.contains("\"schemaVersion\""));
         assert!(json.contains("\"ChinaMobile\""));
+        assert!(!json.contains("autostartLoginOnce"));
         let _ = fs::remove_dir_all(directory);
     }
 }
